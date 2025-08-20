@@ -1,0 +1,39 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Local configuration
+local.properties
+keystore.properties
+
+# IDE
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+build/
+*/build/
+
+# Android build outputs
+*.apk
+*.ap_
+*.aab
+app/release/
+app/debug/
+
+# NDK / external builds
+.externalNativeBuild/
+.cxx/
+
+# Logs
+*.log
+
+# Captures
+captures/
+
+# Signing keys (DO NOT COMMIT KEYS)
+*.jks
+*.keystore
+
+
