@@ -29,9 +29,11 @@ class SettingsFragment : Fragment() {
         val view = inflater.inflate(R.layout.fragment_settings, container, false)
         recyclerView = view.findViewById(R.id.recyclerViewSettings)
         recyclerView.layoutManager = LinearLayoutManager(requireContext())
-        lastConfigRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
+        
+        val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
+        lastConfigRoot = configRoot
         settingsList = mutableListOf(
-            Pair("配置保存路径", com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())),
+            Pair("配置保存路径", configRoot),
             Pair("清除缓存", "")
         )
         adapter = SettingsAdapter(settingsList, { idx ->
@@ -51,6 +53,8 @@ class SettingsFragment : Fragment() {
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         startActivityForResult(intent, REQUEST_CODE_PICK_DIR)
     }
+    
+
 
     private fun showClearCacheDialog() {
         val options = arrayOf("清理无效图片", "清除全部缓存")
@@ -175,12 +179,19 @@ class SettingsFragment : Fragment() {
                     Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 )
             } catch (_: Exception) {}
+            
+            // 设置新的配置路径（会自动迁移配置）
             com.example.imageoverlay.util.ConfigPathUtil.setConfigRootUri(requireContext(), uri)
-            // 更新显示与数据
-            settingsList[0] = Pair("配置保存路径", com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext()))
+            
+            // 更新显示
+            val newConfigRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
+            settingsList[0] = Pair("配置保存路径", newConfigRoot)
             adapter.notifyItemChanged(0)
+            
+            // 重新加载配置数据
             com.example.imageoverlay.model.ConfigRepository.load(requireContext())
-            Toast.makeText(requireContext(), "已设置保存目录", Toast.LENGTH_SHORT).show()
+            
+            Toast.makeText(requireContext(), "已设置保存目录并迁移配置", Toast.LENGTH_SHORT).show()
         }
     }
 }
