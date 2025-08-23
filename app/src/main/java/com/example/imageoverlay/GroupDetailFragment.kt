@@ -228,44 +228,53 @@ class GroupDetailFragment : Fragment() {
     }
 
     private fun onConfigStatusClick(idx: Int) {
-        refreshConfigList()
-        val config = configList[idx]
-        if (config.imageUri.isBlank()) {
-            android.widget.Toast.makeText(requireContext(), "请先选择图片", android.widget.Toast.LENGTH_SHORT).show()
-            return
-        }
-        if (!config.active) {
-            // 全局只允许一个绿点
-            ConfigRepository.getGroups().forEach { group ->
-                group.configs.forEach { it.active = false }
+        try {
+            refreshConfigList()
+            if (idx < 0 || idx >= configList.size) return
+            
+            val config = configList[idx]
+            if (config.imageUri.isBlank()) {
+                android.widget.Toast.makeText(requireContext(), "请先选择图片", android.widget.Toast.LENGTH_SHORT).show()
+                return
             }
-            config.active = true
-            // 先关闭所有遮罩
-            val stopIntent = Intent(requireContext(), OverlayService::class.java)
-            requireContext().stopService(stopIntent)
-            // 再启动遮罩
-            if (Settings.canDrawOverlays(requireContext())) {
-                val intent = Intent(requireContext(), OverlayService::class.java)
-                intent.putExtra("imageUri", config.imageUri)
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    requireContext().startForegroundService(intent)
+            
+            if (!config.active) {
+                // 全局只允许一个绿点
+                ConfigRepository.getGroups().forEach { group ->
+                    group.configs.forEach { it.active = false }
+                }
+                config.active = true
+                // 先关闭所有遮罩
+                val stopIntent = Intent(requireContext(), OverlayService::class.java)
+                requireContext().stopService(stopIntent)
+                // 再启动遮罩
+                if (Settings.canDrawOverlays(requireContext())) {
+                    val intent = Intent(requireContext(), OverlayService::class.java)
+                    intent.putExtra("imageUri", config.imageUri)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        requireContext().startForegroundService(intent)
+                    } else {
+                        requireContext().startService(intent)
+                    }
                 } else {
-                    requireContext().startService(intent)
+                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                        Uri.parse("package:" + requireContext().packageName))
+                    startActivity(intent)
                 }
             } else {
-                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    Uri.parse("package:" + requireContext().packageName))
-                startActivity(intent)
+                // 变红并关闭遮罩
+                config.active = false
+                val intent = Intent(requireContext(), OverlayService::class.java)
+                requireContext().stopService(intent)
             }
-        } else {
-            // 变红并关闭遮罩
-            config.active = false
-            val intent = Intent(requireContext(), OverlayService::class.java)
-            requireContext().stopService(intent)
+            
+            ConfigRepository.save(requireContext())
+            refreshConfigList()
+            adapter.notifyDataSetChanged()
+        } catch (e: Exception) {
+            android.util.Log.e("GroupDetailFragment", "配置状态切换异常", e)
+            android.widget.Toast.makeText(requireContext(), "操作失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
         }
-        ConfigRepository.save(requireContext())
-        refreshConfigList()
-        adapter.notifyDataSetChanged()
     }
 
     private fun onConfigItemClick(idx: Int) {
@@ -304,29 +313,56 @@ class GroupDetailFragment : Fragment() {
     }
 
     private fun showDeleteConfigDialog(idx: Int) {
-        val config = getCurrentGroup()?.configs?.get(idx)
+        val currentGroup = getCurrentGroup() ?: return
+        val configs = currentGroup.configs
+        if (idx < 0 || idx >= configs.size) return
+        
+        val config = configs[idx]
         val dialog = AlertDialog.Builder(requireContext())
             .setTitle("删除配置")
             .setMessage("确定要删除该配置吗？")
             .setPositiveButton("确定") { d, _ ->
-                // 删除图片文件
-                config?.let {
-                    val path = it.imageUri
+                try {
+                    // 如果该配置正在运行，先停止遮罩服务
+                    if (config.active) {
+                        val stopIntent = android.content.Intent(requireContext(), OverlayService::class.java)
+                        requireContext().stopService(stopIntent)
+                        config.active = false
+                    }
+                    
+                    // 删除图片文件
+                    val path = config.imageUri
                     if (path.startsWith("content://")) {
                         try {
                             val uri = android.net.Uri.parse(path)
                             requireContext().contentResolver.delete(uri, null, null)
-                        } catch (_: Exception) {}
+                        } catch (e: Exception) {
+                            android.util.Log.e("GroupDetailFragment", "SAF删除文件失败", e)
+                        }
                     } else {
                         try {
-                            java.io.File(path).delete()
-                        } catch (_: Exception) {}
+                            val file = java.io.File(path)
+                            if (file.exists()) {
+                                file.delete()
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("GroupDetailFragment", "文件删除失败", e)
+                        }
                     }
+                    
+                    // 从内存中移除配置
+                    val currentGroup = getCurrentGroup()
+                    currentGroup?.configs?.removeAt(idx)
+                    // 保存配置
+                    ConfigRepository.save(requireContext())
+                    // 更新界面
+                    refreshConfigList()
+                    adapter.notifyDataSetChanged()
+                    android.widget.Toast.makeText(requireContext(), "配置删除成功", android.widget.Toast.LENGTH_SHORT).show()
+                } catch (e: Exception) {
+                    android.util.Log.e("GroupDetailFragment", "删除配置异常", e)
+                    android.widget.Toast.makeText(requireContext(), "删除失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
                 }
-                getCurrentGroup()?.configs?.removeAt(idx)
-                ConfigRepository.save(requireContext())
-                refreshConfigList()
-                adapter.notifyDataSetChanged()
                 d.dismiss()
             }
             .setNegativeButton("取消", null)

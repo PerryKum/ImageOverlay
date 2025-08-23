@@ -159,38 +159,72 @@ object ConfigRepository {
     }
 
     fun clear(context: Context) {
-        // 删除所有组文件夹和图片
-        val uriStr = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(context)
-        if (uriStr.startsWith("content://")) {
-            // SAF方式递归删除所有子文件夹和文件
-            try {
-                val rootUri = android.net.Uri.parse(uriStr)
-                val rootDoc =
-                    androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
-                val overlayDoc = rootDoc?.findFile("ImageOverlay")
-                overlayDoc?.listFiles()?.forEach { child ->
-                    child.delete()
-                }
-            } catch (_: Exception) {
-            }
-        } else {
-            // 普通路径递归删除所有组文件夹和图片
-            val overlayRootPath = com.example.imageoverlay.util.ConfigPathUtil.getOverlayRoot(context)
-            val overlayRoot = java.io.File(overlayRootPath)
-            if (overlayRoot.exists()) {
-                overlayRoot.listFiles()?.forEach { file ->
-                    try {
-                        if (file.isDirectory) {
-                            file.deleteRecursively()
-                        } else {
-                            file.delete()
-                        }
-                    } catch (_: Exception) {}
-                }
-            }
+        // 先停止遮罩服务
+        try {
+            val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+            context.stopService(stopIntent)
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "停止遮罩服务失败", e)
         }
+        
+        // 先清空内存数据，避免文件删除失败导致的问题
         groupList.clear()
         save(context)
-        load(context)
+        
+        try {
+            // 删除所有组文件夹和图片
+            val overlayRoot = com.example.imageoverlay.util.ConfigPathUtil.getOverlayRoot(context)
+            if (overlayRoot.startsWith("content://")) {
+                // SAF 模式，使用 DocumentFile API
+                try {
+                    val rootUri = android.net.Uri.parse(overlayRoot)
+                    val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
+                    val overlayDoc = rootDoc?.findFile("ImageOverlay")
+                    if (overlayDoc != null && overlayDoc.exists()) {
+                        overlayDoc.listFiles().forEach { child ->
+                            try {
+                                if (child.isDirectory) {
+                                    // 如果是目录，先删除目录内的所有文件
+                                    child.listFiles().forEach { file ->
+                                        try {
+                                            file.delete()
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("ConfigRepository", "SAF删除文件失败", e)
+                                        }
+                                    }
+                                    // 再删除目录本身
+                                    child.delete()
+                                } else {
+                                    // 如果是文件，直接删除
+                                    child.delete()
+                                }
+                            } catch (e: Exception) {
+                                android.util.Log.e("ConfigRepository", "SAF删除子项失败", e)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "SAF清除缓存失败", e)
+                }
+            } else {
+                // 传统文件模式
+                val overlayRootFile = java.io.File(overlayRoot)
+                if (overlayRootFile.exists()) {
+                    overlayRootFile.listFiles()?.forEach { file ->
+                        try {
+                            if (file.isDirectory) {
+                                file.deleteRecursively()
+                            } else {
+                                file.delete()
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("ConfigRepository", "文件清除缓存失败", e)
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "清除缓存总异常", e)
+        }
     }
 }

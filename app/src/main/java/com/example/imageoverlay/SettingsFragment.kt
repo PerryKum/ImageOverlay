@@ -67,12 +67,23 @@ class SettingsFragment : Fragment() {
     }
 
     private fun showClearUnusedImagesDialog() {
+        if (!isAdded || context == null) return
+        
         AlertDialog.Builder(requireContext())
             .setTitle("清理无效图片")
             .setMessage("将清理所有无效图片，是否继续？")
             .setPositiveButton("确定") { d, _ ->
-                clearUnusedImages()
-                Toast.makeText(requireContext(), "已清理无效图片", Toast.LENGTH_SHORT).show()
+                try {
+                    if (isAdded && context != null) {
+                        clearUnusedImages()
+                        Toast.makeText(requireContext(), "已清理无效图片", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SettingsFragment", "清理无效图片失败", e)
+                    if (isAdded && context != null) {
+                        Toast.makeText(requireContext(), "清理无效图片失败，请重试", Toast.LENGTH_SHORT).show()
+                    }
+                }
                 d.dismiss()
             }
             .setNegativeButton("取消", null)
@@ -80,12 +91,23 @@ class SettingsFragment : Fragment() {
     }
 
     private fun showClearAllCacheDialog() {
+        if (!isAdded || context == null) return
+        
         AlertDialog.Builder(requireContext())
             .setTitle("清除全部缓存")
             .setMessage("将清除所有配置和图片，是否继续？")
             .setPositiveButton("确定") { d, _ ->
-                com.example.imageoverlay.model.ConfigRepository.clear(requireContext())
-                Toast.makeText(requireContext(), "已清除缓存", Toast.LENGTH_SHORT).show()
+                try {
+                    if (isAdded && context != null) {
+                        com.example.imageoverlay.model.ConfigRepository.clear(requireContext())
+                        Toast.makeText(requireContext(), "已清除缓存", Toast.LENGTH_SHORT).show()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SettingsFragment", "清除缓存失败", e)
+                    if (isAdded && context != null) {
+                        Toast.makeText(requireContext(), "清除缓存失败，请重试", Toast.LENGTH_SHORT).show()
+                    }
+                }
                 d.dismiss()
             }
             .setNegativeButton("取消", null)
@@ -93,38 +115,53 @@ class SettingsFragment : Fragment() {
     }
 
     private fun clearUnusedImages() {
-        val uriStr = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
-        val usedImages = mutableSetOf<String>()
-        com.example.imageoverlay.model.ConfigRepository.getGroups().forEach { group ->
-            group.configs.forEach { config ->
-                usedImages.add(config.imageUri)
+        if (!isAdded || context == null) return
+        
+        try {
+            val overlayRoot = com.example.imageoverlay.util.ConfigPathUtil.getOverlayRoot(requireContext())
+            val usedImages = mutableSetOf<String>()
+            com.example.imageoverlay.model.ConfigRepository.getGroups().forEach { group ->
+                group.configs.forEach { config ->
+                    usedImages.add(config.imageUri)
+                }
             }
-        }
-        if (uriStr.startsWith("content://")) {
-            try {
-                val rootUri = android.net.Uri.parse(uriStr)
-                val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(requireContext(), rootUri)
-                rootDoc?.listFiles()?.forEach { groupDoc ->
-                    if (groupDoc.isDirectory) {
-                        groupDoc.listFiles().forEach { file ->
-                            if (file.name?.endsWith(".png") == true && file.uri.toString() !in usedImages) {
-                                file.delete()
+            if (overlayRoot.startsWith("content://")) {
+                // SAF 模式，使用 DocumentFile API
+                try {
+                    val rootUri = android.net.Uri.parse(overlayRoot)
+                    val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(requireContext(), rootUri)
+                    val overlayDoc = rootDoc?.findFile("ImageOverlay")
+                    if (overlayDoc != null && overlayDoc.exists()) {
+                        overlayDoc.listFiles().forEach { groupDoc ->
+                            if (groupDoc.isDirectory) {
+                                groupDoc.listFiles().forEach { file ->
+                                    if (file.name?.endsWith(".png") == true && file.uri.toString() !in usedImages) {
+                                        file.delete()
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SettingsFragment", "SAF清理无效图片失败", e)
+                }
+            } else {
+                // 传统文件模式
+                val root = java.io.File(overlayRoot)
+                if (root.exists()) {
+                    root.listFiles()?.forEach { groupDir ->
+                        if (groupDir.isDirectory) {
+                            groupDir.listFiles()?.forEach { file ->
+                                if (file.name.endsWith(".png") && file.absolutePath !in usedImages) {
+                                    file.delete()
+                                }
                             }
                         }
                     }
                 }
-            } catch (_: Exception) {}
-        } else {
-            val root = java.io.File(uriStr)
-            root.listFiles()?.forEach { groupDir ->
-                if (groupDir.isDirectory) {
-                    groupDir.listFiles()?.forEach { file ->
-                        if (file.name.endsWith(".png") && file.absolutePath !in usedImages) {
-                            file.delete()
-                        }
-                    }
-                }
             }
+        } catch (e: Exception) {
+            android.util.Log.e("SettingsFragment", "clearUnusedImages异常", e)
         }
     }
 

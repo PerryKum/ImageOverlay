@@ -23,6 +23,10 @@ object ConfigPathUtil {
 
     fun getOverlayRoot(context: Context): String {
         val root = getConfigRoot(context)
+        // 如果是 SAF URI，返回原始路径，调用方需要自己处理
+        if (root.startsWith("content://")) {
+            return root
+        }
         return if (File(root).name == SUB_DIR) root else File(root, SUB_DIR).absolutePath
     }
 

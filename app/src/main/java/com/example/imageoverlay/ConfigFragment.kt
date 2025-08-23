@@ -60,6 +60,9 @@ class ConfigFragment : Fragment() {
 				ConfigRepository.setDefaultActive(requireContext(), false)
 			} else {
 				if (def != null && !def.imageUri.isBlank() && android.provider.Settings.canDrawOverlays(requireContext())) {
+					// 先停止所有遮罩服务
+					val stopIntent = android.content.Intent(requireContext(), OverlayService::class.java)
+					requireContext().stopService(stopIntent)
 					// 关闭其他预设
 					ConfigRepository.getGroups().forEach { g -> g.configs.forEach { it.active = false } }
 					ConfigRepository.save(requireContext())
@@ -80,7 +83,9 @@ class ConfigFragment : Fragment() {
 
 		// Also refresh when coming back
 		view.viewTreeObserver.addOnWindowFocusChangeListener {
-			refreshDefaultRow()
+			if (isAdded && context != null) {
+				refreshDefaultRow()
+			}
 		}
 
 		// 长按默认配置行 -> 清除默认配置
@@ -116,19 +121,25 @@ class ConfigFragment : Fragment() {
 	}
 
 	fun refreshDefaultRow() {
-		val def = ConfigRepository.getDefaultConfig(requireContext())
-		val title = if (def == null) {
-			"默认配置（长按任意配置可设置）"
-		} else {
-			val group = ConfigRepository.getDefaultGroupName(requireContext()) ?: ""
-			"默认配置（" + group + "/" + def.configName + ")"
-		}
-		tvDefaultName?.text = title
-		ivDefaultStatus?.setImageResource(if (ConfigRepository.isDefaultActive(requireContext())) R.drawable.ic_circle_green else R.drawable.ic_circle_red)
-		if (!def?.imageUri.isNullOrBlank()) {
-			try { ivDefaultThumb?.setImageURI(android.net.Uri.parse(def?.imageUri ?: "")) } catch (_: Exception) { ivDefaultThumb?.setImageResource(android.R.drawable.ic_menu_report_image) }
-		} else {
-			ivDefaultThumb?.setImageResource(android.R.drawable.ic_menu_report_image)
+		if (!isAdded || context == null) return
+		
+		try {
+			val def = ConfigRepository.getDefaultConfig(requireContext())
+			val title = if (def == null) {
+				"默认配置（长按任意配置可设置）"
+			} else {
+				val group = ConfigRepository.getDefaultGroupName(requireContext()) ?: ""
+				"默认配置（" + group + "/" + def.configName + ")"
+			}
+			tvDefaultName?.text = title
+			ivDefaultStatus?.setImageResource(if (ConfigRepository.isDefaultActive(requireContext())) R.drawable.ic_circle_green else R.drawable.ic_circle_red)
+			if (!def?.imageUri.isNullOrBlank()) {
+				try { ivDefaultThumb?.setImageURI(android.net.Uri.parse(def?.imageUri ?: "")) } catch (_: Exception) { ivDefaultThumb?.setImageResource(android.R.drawable.ic_menu_report_image) }
+			} else {
+				ivDefaultThumb?.setImageResource(android.R.drawable.ic_menu_report_image)
+			}
+		} catch (e: Exception) {
+			android.util.Log.e("ConfigFragment", "refreshDefaultRow异常", e)
 		}
 	}
 
@@ -179,11 +190,12 @@ class ConfigFragment : Fragment() {
 	}
 
 	private fun showDeleteGroupDialog(idx: Int) {
+		val group = groupList.getOrNull(idx) ?: return
 		val dialog = android.app.AlertDialog.Builder(requireContext())
 			.setTitle("删除组")
 			.setMessage("确定要删除该组吗？")
 			.setPositiveButton("确定") { d, _ ->
-				showDeleteGroupConfigsDialog(idx)
+				showDeleteGroupConfigsDialog(group)
 				d.dismiss()
 			}
 			.setNegativeButton("取消", null)
@@ -191,33 +203,66 @@ class ConfigFragment : Fragment() {
 		dialog.show()
 	}
 
-	private fun showDeleteGroupConfigsDialog(idx: Int) {
-		val group = groupList.getOrNull(idx)
+	private fun showDeleteGroupConfigsDialog(group: Group) {
 		val dialog = android.app.AlertDialog.Builder(requireContext())
 			.setTitle("警告")
 			.setMessage("将删除组内所有配置，是否继续？")
 			.setPositiveButton("确定") { d, _ ->
-				// 删除组文件夹及图片
-				group?.let {
-					val groupName = it.groupName
-					val uriStr = ConfigPathUtil.getConfigRoot(requireContext())
-					if (uriStr.startsWith("content://")) {
-						try {
-							val rootUri = android.net.Uri.parse(uriStr)
-							val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(requireContext(), rootUri)
-							val groupDoc = rootDoc?.findFile(groupName)
-							groupDoc?.delete()
-						} catch (_: Exception) {}
-					} else {
-						try {
-							val groupDir = java.io.File(uriStr, groupName)
-							groupDir.deleteRecursively()
-						} catch (_: Exception) {}
+				try {
+					// 如果组内有正在运行的配置，先停止遮罩服务
+					val hasActiveConfig = group.configs.any { it.active }
+					if (hasActiveConfig) {
+						val stopIntent = android.content.Intent(requireContext(), OverlayService::class.java)
+						requireContext().stopService(stopIntent)
+						// 关闭所有配置的激活状态
+						ConfigRepository.getGroups().forEach { g -> g.configs.forEach { it.active = false } }
 					}
+					
+					// 删除组文件夹及图片
+					val groupName = group.groupName
+					val overlayRoot = ConfigPathUtil.getOverlayRoot(requireContext())
+					if (overlayRoot.startsWith("content://")) {
+						// SAF 模式，使用 DocumentFile API
+						try {
+							val rootUri = android.net.Uri.parse(overlayRoot)
+							val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(requireContext(), rootUri)
+							val overlayDoc = rootDoc?.findFile("ImageOverlay")
+							val groupDoc = overlayDoc?.findFile(groupName)
+							if (groupDoc != null && groupDoc.exists()) {
+								// 先删除组内的所有文件
+								groupDoc.listFiles().forEach { it.delete() }
+								// 再删除组文件夹
+								groupDoc.delete()
+							}
+						} catch (e: Exception) {
+							android.util.Log.e("ConfigFragment", "SAF删除组失败", e)
+						}
+					} else {
+						// 传统文件模式
+						try {
+							val groupDir = java.io.File(overlayRoot, groupName)
+							if (groupDir.exists()) {
+								groupDir.deleteRecursively()
+							}
+						} catch (e: Exception) {
+							android.util.Log.e("ConfigFragment", "文件删除组失败", e)
+						}
+					}
+					
+					// 从内存中移除组
+					val groups = ConfigRepository.getGroups()
+					groups.removeAll { it.groupName == groupName }
+					// 保存配置
+					ConfigRepository.save(requireContext())
+					// 更新界面
+					groupList.clear()
+					groupList.addAll(ConfigRepository.getGroups().filter { it.groupName != "默认配置" })
+					adapter.notifyDataSetChanged()
+					android.widget.Toast.makeText(requireContext(), "组删除成功", android.widget.Toast.LENGTH_SHORT).show()
+				} catch (e: Exception) {
+					android.util.Log.e("ConfigFragment", "删除组异常", e)
+					android.widget.Toast.makeText(requireContext(), "删除失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
 				}
-				groupList.removeAt(idx)
-				ConfigRepository.save(requireContext())
-				adapter.notifyDataSetChanged()
 				d.dismiss()
 			}
 			.setNegativeButton("取消", null)

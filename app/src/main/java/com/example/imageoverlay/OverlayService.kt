@@ -18,6 +18,9 @@ class OverlayService : Service() {
     private var imageView: ImageView? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 先清理之前的遮罩
+        removeOverlay()
+        
         val imageUri = intent?.getStringExtra("imageUri")?.let { Uri.parse(it) }
         if (imageUri != null) {
             showOverlay(imageUri)
@@ -52,9 +55,20 @@ class OverlayService : Service() {
         windowManager?.addView(imageView, params)
     }
 
+    private fun removeOverlay() {
+        try {
+            if (imageView != null && windowManager != null) {
+                windowManager?.removeView(imageView)
+                imageView = null
+            }
+        } catch (e: Exception) {
+            // 忽略异常，可能视图已经被移除
+        }
+    }
+
     override fun onDestroy() {
         super.onDestroy()
-        if (imageView != null) windowManager?.removeView(imageView)
+        removeOverlay()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
