@@ -16,7 +16,8 @@ class ConfigAdapter(
     private val configs: List<Config>,
     private val onStatusClick: (Int) -> Unit,
     private val onItemClick: (Int) -> Unit,
-    private val onLongClick: (Int) -> Unit
+    private val onLongClick: (Int) -> Unit,
+    private val defaultConfigName: String? = null
 ) : RecyclerView.Adapter<ConfigAdapter.ConfigViewHolder>() {
     class ConfigViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val ivStatus: ImageView = itemView.findViewById(R.id.ivStatus)
@@ -31,7 +32,12 @@ class ConfigAdapter(
 
     override fun onBindViewHolder(holder: ConfigViewHolder, position: Int) {
         val config = configs[position]
-        holder.tvConfigName.text = config.configName
+        val displayName = if (config.configName == defaultConfigName) {
+            "${config.configName} ⭐"
+        } else {
+            config.configName
+        }
+        holder.tvConfigName.text = displayName
         holder.ivStatus.setImageResource(if (config.active) R.drawable.ic_circle_green else R.drawable.ic_circle_red)
         holder.ivStatus.setOnClickListener { onStatusClick(position) }
         holder.itemView.setOnClickListener { onItemClick(position) }

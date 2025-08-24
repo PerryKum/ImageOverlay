@@ -1,6 +1,8 @@
 package com.example.imageoverlay
 
+import android.app.Activity
 import android.app.AlertDialog
+import android.content.Intent
 import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
@@ -40,7 +42,7 @@ class ConfigFragment : Fragment() {
 				.addToBackStack(null)
 				.commit()
 		}, { idx ->
-			showDeleteGroupDialog(idx)
+			showGroupContextMenu(idx)
 		})
 		recyclerView.adapter = adapter
 
@@ -125,6 +127,20 @@ class ConfigFragment : Fragment() {
 		return view
 	}
 
+	override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+		super.onActivityResult(requestCode, resultCode, data)
+		if (requestCode == 1001 && resultCode == Activity.RESULT_OK) {
+			val packageName = data?.getStringExtra("package_name")
+			val appName = data?.getStringExtra("app_name")
+			if (!packageName.isNullOrBlank()) {
+				groupList.clear()
+				groupList.addAll(ConfigRepository.getGroups().filter { it.groupName != "默认配置" })
+				adapter.notifyDataSetChanged()
+				Toast.makeText(requireContext(), "已绑定应用: $appName", Toast.LENGTH_SHORT).show()
+			}
+		}
+	}
+
 	fun refreshDefaultRow() {
 		if (!isAdded || context == null) return
 		
@@ -192,6 +208,51 @@ class ConfigFragment : Fragment() {
 			}
 		}
 		dialog.show()
+	}
+
+	private fun showGroupContextMenu(idx: Int) {
+		val group = groupList.getOrNull(idx) ?: return
+		val options = mutableListOf<String>()
+		
+		if (group.boundPackageName != null) {
+			options.add("解绑应用")
+		} else {
+			options.add("绑定应用")
+		}
+		options.add("删除组")
+		
+		AlertDialog.Builder(requireContext())
+			.setTitle("操作")
+			.setItems(options.toTypedArray()) { d, which ->
+				when (which) {
+					0 -> {
+						if (group.boundPackageName != null) {
+							unbindAppFromGroup(group)
+						} else {
+							bindAppToGroup(group)
+						}
+					}
+					1 -> showDeleteGroupDialog(idx)
+				}
+				d.dismiss()
+			}
+			.setNegativeButton("取消", null)
+			.show()
+	}
+
+	private fun bindAppToGroup(group: Group) {
+		val intent = Intent(requireContext(), AppSelectorActivity::class.java)
+		intent.putExtra("group_name", group.groupName)
+		startActivityForResult(intent, 1001)
+	}
+
+	private fun unbindAppFromGroup(group: Group) {
+		ConfigRepository.unbindAppFromGroup(group.groupName)
+		ConfigRepository.save(requireContext())
+		groupList.clear()
+		groupList.addAll(ConfigRepository.getGroups().filter { it.groupName != "默认配置" })
+		adapter.notifyDataSetChanged()
+		Toast.makeText(requireContext(), "已解绑应用", Toast.LENGTH_SHORT).show()
 	}
 
 	private fun showDeleteGroupDialog(idx: Int) {

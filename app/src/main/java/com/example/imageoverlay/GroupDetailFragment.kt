@@ -61,7 +61,7 @@ class GroupDetailFragment : Fragment() {
             onConfigItemClick(idx)
         }, { idx ->
             showConfigContextMenu(idx)
-        })
+        }, getCurrentGroup()?.defaultConfigName)
         recyclerView.adapter = adapter
         tvGroupTitle.text = groupName ?: "组"
         btnAddConfig.setOnClickListener { showAddConfigDialog() }
@@ -69,7 +69,14 @@ class GroupDetailFragment : Fragment() {
         btnRefreshConfig.setOnClickListener {
             com.example.imageoverlay.model.ConfigRepository.load(requireContext())
             refreshConfigList()
-            adapter.notifyDataSetChanged()
+            adapter = ConfigAdapter(requireContext(), configList, { idx ->
+                onConfigStatusClick(idx)
+            }, { idx ->
+                onConfigItemClick(idx)
+            }, { idx ->
+                showConfigContextMenu(idx)
+            }, getCurrentGroup()?.defaultConfigName)
+            recyclerView.adapter = adapter
             android.widget.Toast.makeText(requireContext(), "已刷新", android.widget.Toast.LENGTH_SHORT).show()
         }
         return view
@@ -152,7 +159,14 @@ class GroupDetailFragment : Fragment() {
             getCurrentGroup()?.configs?.add(config)
             ConfigRepository.save(requireContext())
             refreshConfigList()
-            adapter.notifyDataSetChanged()
+            adapter = ConfigAdapter(requireContext(), configList, { idx ->
+                onConfigStatusClick(idx)
+            }, { idx ->
+                onConfigItemClick(idx)
+            }, { idx ->
+                showConfigContextMenu(idx)
+            }, getCurrentGroup()?.defaultConfigName)
+            recyclerView.adapter = adapter
             addConfigDialog?.dismiss()
         }
         etConfigName.setOnEditorActionListener { _, actionId, _ ->
@@ -222,7 +236,14 @@ class GroupDetailFragment : Fragment() {
                 }
                 com.example.imageoverlay.model.ConfigRepository.save(requireContext())
                 refreshConfigList()
-                adapter.notifyDataSetChanged()
+                adapter = ConfigAdapter(requireContext(), configList, { idx ->
+                    onConfigStatusClick(idx)
+                }, { idx ->
+                    onConfigItemClick(idx)
+                }, { idx ->
+                    showConfigContextMenu(idx)
+                }, getCurrentGroup()?.defaultConfigName)
+                recyclerView.adapter = adapter
                 android.widget.Toast.makeText(requireContext(), "已更新默认配置图片", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
@@ -271,7 +292,14 @@ class GroupDetailFragment : Fragment() {
             
             ConfigRepository.save(requireContext())
             refreshConfigList()
-            adapter.notifyDataSetChanged()
+            adapter = ConfigAdapter(requireContext(), configList, { idx ->
+                onConfigStatusClick(idx)
+            }, { idx ->
+                onConfigItemClick(idx)
+            }, { idx ->
+                showConfigContextMenu(idx)
+            }, getCurrentGroup()?.defaultConfigName)
+            recyclerView.adapter = adapter
         } catch (e: Exception) {
             android.util.Log.e("GroupDetailFragment", "配置状态切换异常", e)
             android.widget.Toast.makeText(requireContext(), "操作失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
@@ -303,14 +331,22 @@ class GroupDetailFragment : Fragment() {
             Toast.makeText(requireContext(), "该配置未设置图片", Toast.LENGTH_SHORT).show()
             return
         }
-        com.example.imageoverlay.model.ConfigRepository.setDefaultConfig(requireContext(), groupName ?: "", cfg.copy(active = false))
-        Toast.makeText(requireContext(), "已设为默认配置", Toast.LENGTH_SHORT).show()
-        // 通知 ConfigFragment 刷新默认配置行
-        parentFragmentManager.fragments.forEach { fragment ->
-            if (fragment is ConfigFragment) {
-                fragment.refreshDefaultRow()
-            }
-        }
+        // 设置为组的默认遮罩
+        com.example.imageoverlay.model.ConfigRepository.setGroupDefaultConfig(groupName ?: "", cfg.configName)
+        com.example.imageoverlay.model.ConfigRepository.save(requireContext())
+        
+        // 刷新界面
+        refreshConfigList()
+        adapter = ConfigAdapter(requireContext(), configList, { idx ->
+            onConfigStatusClick(idx)
+        }, { idx ->
+            onConfigItemClick(idx)
+        }, { idx ->
+            showConfigContextMenu(idx)
+        }, getCurrentGroup()?.defaultConfigName)
+        recyclerView.adapter = adapter
+        
+        Toast.makeText(requireContext(), "已设为默认遮罩", Toast.LENGTH_SHORT).show()
     }
 
     private fun showDeleteConfigDialog(idx: Int) {
@@ -358,7 +394,14 @@ class GroupDetailFragment : Fragment() {
                     ConfigRepository.save(requireContext())
                     // 更新界面
                     refreshConfigList()
-                    adapter.notifyDataSetChanged()
+                    adapter = ConfigAdapter(requireContext(), configList, { idx ->
+                        onConfigStatusClick(idx)
+                    }, { idx ->
+                        onConfigItemClick(idx)
+                    }, { idx ->
+                        showConfigContextMenu(idx)
+                    }, getCurrentGroup()?.defaultConfigName)
+                    recyclerView.adapter = adapter
                     android.widget.Toast.makeText(requireContext(), "配置删除成功", android.widget.Toast.LENGTH_SHORT).show()
                 } catch (e: Exception) {
                     android.util.Log.e("GroupDetailFragment", "删除配置异常", e)

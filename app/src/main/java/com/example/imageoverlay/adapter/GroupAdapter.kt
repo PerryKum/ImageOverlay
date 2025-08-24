@@ -25,7 +25,12 @@ class GroupAdapter(
 
     override fun onBindViewHolder(holder: GroupViewHolder, position: Int) {
         val group = groups[position]
-        holder.tvGroupName.text = group.groupName
+        val displayName = if (group.boundPackageName != null) {
+            "${group.groupName} 📱"
+        } else {
+            group.groupName
+        }
+        holder.tvGroupName.text = displayName
         holder.tvRemark.text = group.remark
         holder.itemView.setOnClickListener { onClick(group) }
         holder.itemView.setOnLongClickListener {

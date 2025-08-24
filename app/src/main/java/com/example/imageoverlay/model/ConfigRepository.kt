@@ -17,6 +17,7 @@ object ConfigRepository {
     private const val KEY_DEFAULT_URI = "uri"
     private const val KEY_DEFAULT_GROUP = "group"
     private const val KEY_DEFAULT_ACTIVE = "active"
+    private const val PREF_APP_BINDINGS = "app_bindings"
 
     fun load(context: Context) {
         val configFile = ConfigPathUtil.getConfigFile(context)
@@ -150,6 +151,68 @@ object ConfigRepository {
             .remove(KEY_DEFAULT_GROUP)
             .putBoolean(KEY_DEFAULT_ACTIVE, false)
             .apply()
+    }
+
+    // 新增：设置组的默认遮罩
+    fun setGroupDefaultConfig(groupName: String, configName: String) {
+        val group = groupList.find { it.groupName == groupName }
+        group?.let {
+            // 清除其他配置的默认标记
+            it.configs.forEach { config -> config.isDefault = false }
+            // 设置指定配置为默认
+            it.configs.find { config -> config.configName == configName }?.isDefault = true
+            it.defaultConfigName = configName
+        }
+    }
+
+    // 新增：获取组的默认遮罩
+    fun getGroupDefaultConfig(groupName: String): Config? {
+        val group = groupList.find { it.groupName == groupName }
+        return group?.configs?.find { it.isDefault } ?: group?.configs?.firstOrNull()
+    }
+
+    // 新增：绑定应用到组
+    fun bindAppToGroup(groupName: String, packageName: String) {
+        val group = groupList.find { it.groupName == groupName }
+        group?.boundPackageName = packageName
+    }
+
+    // 新增：解绑应用
+    fun unbindAppFromGroup(groupName: String) {
+        val group = groupList.find { it.groupName == groupName }
+        group?.boundPackageName = null
+    }
+
+    // 新增：根据包名获取绑定的组
+    fun getGroupByPackageName(packageName: String): Group? {
+        return groupList.find { it.boundPackageName == packageName }
+    }
+
+    // 新增：处理应用启动事件
+    fun handleAppLaunch(context: Context, packageName: String) {
+        val group = getGroupByPackageName(packageName)
+        if (group != null) {
+            val defaultConfig = getGroupDefaultConfig(group.groupName)
+            if (defaultConfig != null) {
+                // 设置为全局默认遮罩
+                setDefaultConfig(context, group.groupName, defaultConfig)
+                // 激活遮罩
+                setDefaultActive(context, true)
+                
+                // 启动遮罩服务
+                try {
+                    val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+                    intent.putExtra("imageUri", defaultConfig.imageUri)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        context.startForegroundService(intent)
+                    } else {
+                        context.startService(intent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "启动遮罩服务失败", e)
+                }
+            }
+        }
     }
 
     fun addGroup(context: Context, group: Group) {

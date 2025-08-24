@@ -17,7 +17,20 @@ class MainActivity : AppCompatActivity() {
         com.example.imageoverlay.util.ConfigPathUtil.checkAndFixRoot(this)
         setContentView(R.layout.activity_main)
         
-
+        // 检查使用情况访问权限
+        if (!com.example.imageoverlay.util.UsagePermissionUtil.hasUsageStatsPermission(this)) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("需要权限")
+                .setMessage("应用需要访问使用情况权限来监听应用启动。请在设置中授权。")
+                .setPositiveButton("去设置") { _, _ ->
+                    com.example.imageoverlay.util.UsagePermissionUtil.openUsageStatsSettings(this)
+                }
+                .setNegativeButton("取消", null)
+                .show()
+        }
+        
+        // 启动应用监听服务
+        AppLaunchListenerService.startService(this)
         
         // 检查是否已设置SAF路径
         val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(this)
