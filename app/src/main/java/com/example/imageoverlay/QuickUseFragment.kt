@@ -14,6 +14,7 @@ import android.widget.ImageView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.PermissionUtil
 
 class QuickUseFragment : Fragment() {
     private var imageUri: Uri? = null
@@ -62,7 +63,7 @@ class QuickUseFragment : Fragment() {
                 return@setOnClickListener
             }
             if (imageUri != null) {
-                if (Settings.canDrawOverlays(requireContext())) {
+                if (PermissionUtil.checkOverlayPermission(requireContext())) {
                     val intent = Intent(requireContext(), OverlayService::class.java)
                     intent.putExtra("imageUri", imageUri.toString())
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -73,10 +74,10 @@ class QuickUseFragment : Fragment() {
                     isOverlayActive = true
                     sp.edit().putBoolean(KEY_OVERLAY_ACTIVE, true).apply()
                     updateButtonState()
+                    Toast.makeText(requireContext(), "遮罩已启动", Toast.LENGTH_SHORT).show()
                 } else {
-                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + requireContext().packageName))
-                    startActivity(intent)
+                    PermissionUtil.openOverlayPermissionSettings(requireContext())
+                    Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", Toast.LENGTH_LONG).show()
                 }
             } else {
                 Toast.makeText(requireContext(), "请先选择图片", Toast.LENGTH_SHORT).show()

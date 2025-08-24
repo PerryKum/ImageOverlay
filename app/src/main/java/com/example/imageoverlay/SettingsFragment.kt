@@ -83,7 +83,6 @@ class SettingsFragment : Fragment() {
                         Toast.makeText(requireContext(), "已清理无效图片", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("SettingsFragment", "清理无效图片失败", e)
                     if (isAdded && context != null) {
                         Toast.makeText(requireContext(), "清理无效图片失败，请重试", Toast.LENGTH_SHORT).show()
                     }
@@ -107,7 +106,6 @@ class SettingsFragment : Fragment() {
                         Toast.makeText(requireContext(), "已清除缓存", Toast.LENGTH_SHORT).show()
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("SettingsFragment", "清除缓存失败", e)
                     if (isAdded && context != null) {
                         Toast.makeText(requireContext(), "清除缓存失败，请重试", Toast.LENGTH_SHORT).show()
                     }
@@ -147,7 +145,7 @@ class SettingsFragment : Fragment() {
                         }
                     }
                 } catch (e: Exception) {
-                    android.util.Log.e("SettingsFragment", "SAF清理无效图片失败", e)
+                    // SAF清理无效图片失败
                 }
             } else {
                 // 传统文件模式
@@ -165,7 +163,7 @@ class SettingsFragment : Fragment() {
                 }
             }
         } catch (e: Exception) {
-            android.util.Log.e("SettingsFragment", "clearUnusedImages异常", e)
+            // clearUnusedImages异常
         }
     }
 

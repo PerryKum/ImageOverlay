@@ -23,6 +23,7 @@ import com.example.imageoverlay.adapter.ConfigAdapter
 import com.example.imageoverlay.model.Config
 import com.example.imageoverlay.model.Group
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.PermissionUtil
 import com.example.imageoverlay.util.ConfigPathUtil
 import java.io.File
 import java.io.FileOutputStream
@@ -248,7 +249,7 @@ class GroupDetailFragment : Fragment() {
                 val stopIntent = Intent(requireContext(), OverlayService::class.java)
                 requireContext().stopService(stopIntent)
                 // 再启动遮罩
-                if (Settings.canDrawOverlays(requireContext())) {
+                if (PermissionUtil.checkOverlayPermission(requireContext())) {
                     val intent = Intent(requireContext(), OverlayService::class.java)
                     intent.putExtra("imageUri", config.imageUri)
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -256,10 +257,10 @@ class GroupDetailFragment : Fragment() {
                     } else {
                         requireContext().startService(intent)
                     }
+                    android.widget.Toast.makeText(requireContext(), "遮罩已启动", android.widget.Toast.LENGTH_SHORT).show()
                 } else {
-                    val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                        Uri.parse("package:" + requireContext().packageName))
-                    startActivity(intent)
+                    PermissionUtil.openOverlayPermissionSettings(requireContext())
+                    android.widget.Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", android.widget.Toast.LENGTH_LONG).show()
                 }
             } else {
                 // 变红并关闭遮罩

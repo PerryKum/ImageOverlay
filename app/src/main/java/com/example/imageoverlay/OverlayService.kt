@@ -29,6 +29,8 @@ class OverlayService : Service() {
         val notification: Notification = NotificationCompat.Builder(this, "overlay_channel")
             .setContentTitle("遮罩已启动")
             .setSmallIcon(R.mipmap.ic_launcher)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
             .build()
         startForeground(1, notification)
         return START_STICKY
@@ -49,20 +51,23 @@ class OverlayService : Service() {
                 WindowManager.LayoutParams.TYPE_PHONE,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                     WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         )
+        
+        // 为安卓15+添加额外的兼容性设置
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            params.flags = params.flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_OVERSCAN
+        }
+        
         windowManager?.addView(imageView, params)
     }
 
     private fun removeOverlay() {
-        try {
-            if (imageView != null && windowManager != null) {
-                windowManager?.removeView(imageView)
-                imageView = null
-            }
-        } catch (e: Exception) {
-            // 忽略异常，可能视图已经被移除
+        if (imageView != null && windowManager != null) {
+            windowManager?.removeView(imageView)
+            imageView = null
         }
     }
 

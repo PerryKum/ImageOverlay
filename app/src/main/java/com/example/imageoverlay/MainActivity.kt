@@ -6,6 +6,7 @@ import com.google.android.material.bottomnavigation.BottomNavigationView
 import androidx.fragment.app.Fragment
 import com.example.imageoverlay.util.ConfigPathUtil
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.PermissionUtil
 
 class MainActivity : AppCompatActivity() {
     private val REQUEST_CODE_PICK_DIR = 1001
@@ -15,6 +16,8 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         com.example.imageoverlay.util.ConfigPathUtil.checkAndFixRoot(this)
         setContentView(R.layout.activity_main)
+        
+
         
         // 检查是否已设置SAF路径
         val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(this)

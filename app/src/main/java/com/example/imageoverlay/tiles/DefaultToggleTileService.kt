@@ -8,6 +8,7 @@ import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import com.example.imageoverlay.OverlayService
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.PermissionUtil
 
 class DefaultToggleTileService : TileService() {
 
@@ -27,11 +28,9 @@ class DefaultToggleTileService : TileService() {
             ConfigRepository.setDefaultActive(this, false)
         } else {
             // turn on – ensure overlay permission
-            if (!Settings.canDrawOverlays(this)) {
+            if (!PermissionUtil.checkOverlayPermission(this)) {
                 // Show settings; tile cannot launch for result, but we can open settings
-                val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + packageName))
-                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                startActivityAndCollapse(intent)
+                PermissionUtil.openOverlayPermissionSettings(this)
                 return
             }
             val imageUri = ConfigRepository.getDefaultConfig(this)?.imageUri

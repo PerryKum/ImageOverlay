@@ -11,8 +11,8 @@ android {
         applicationId "com.example.imageoverlay"
         minSdk 23
         targetSdk 34
-        versionCode 1
-        versionName "1.1"
+        versionCode 3
+        versionName "1.2"
     }
 
     compileOptions {

@@ -14,6 +14,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.imageoverlay.adapter.GroupAdapter
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.PermissionUtil
 import com.example.imageoverlay.model.Group
 import com.example.imageoverlay.util.ConfigPathUtil
 
@@ -59,7 +60,7 @@ class ConfigFragment : Fragment() {
 				requireContext().stopService(stopIntent)
 				ConfigRepository.setDefaultActive(requireContext(), false)
 			} else {
-				if (def != null && !def.imageUri.isBlank() && android.provider.Settings.canDrawOverlays(requireContext())) {
+				if (def != null && !def.imageUri.isBlank() && PermissionUtil.checkOverlayPermission(requireContext())) {
 					// 先停止所有遮罩服务
 					val stopIntent = android.content.Intent(requireContext(), OverlayService::class.java)
 					requireContext().stopService(stopIntent)
@@ -74,8 +75,12 @@ class ConfigFragment : Fragment() {
 						requireContext().startService(intent)
 					}
 					ConfigRepository.setDefaultActive(requireContext(), true)
-				} else {
+					android.widget.Toast.makeText(requireContext(), "默认遮罩已启动", android.widget.Toast.LENGTH_SHORT).show()
+				} else if (def == null || def.imageUri.isBlank()) {
 					android.widget.Toast.makeText(requireContext(), "请先在任意配置上设置默认配置", android.widget.Toast.LENGTH_SHORT).show()
+				} else {
+					PermissionUtil.openOverlayPermissionSettings(requireContext())
+					android.widget.Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", android.widget.Toast.LENGTH_LONG).show()
 				}
 			}
 			refreshDefaultRow()
