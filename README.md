@@ -1,3 +1,5 @@
+** 官网：https://perrykum.github.io/ImageOverlay/index.html **
+
 ## ImageOverlay —— 安卓掌机全局遮罩工具
 
 让任意 PNG 遮罩“强行”显示在屏幕顶层，不依赖模拟器内置功能。
