@@ -15,13 +15,19 @@ import com.example.imageoverlay.util.ConfigPathUtil
 import android.content.Intent
 import android.net.Uri
 import android.app.Activity
+import androidx.appcompat.widget.SwitchCompat
 
 class SettingsFragment : Fragment() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: SettingsAdapter
-    private var settingsList: MutableList<Pair<String, String>> = mutableListOf()
+    private var settingsList: MutableList<SettingItem> = mutableListOf()
     private val REQUEST_CODE_PICK_DIR = 1001
     private var lastConfigRoot: String? = null
+
+    sealed class SettingItem {
+        data class TextItem(val title: String, val value: String, val action: () -> Unit) : SettingItem()
+        data class SwitchItem(val title: String, val description: String, val isChecked: Boolean, val onCheckedChange: (Boolean) -> Unit) : SettingItem()
+    }
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
@@ -32,18 +38,22 @@ class SettingsFragment : Fragment() {
         
         val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
         lastConfigRoot = configRoot
+        
+        // 创建设置项列表
         settingsList = mutableListOf(
-            Pair("配置保存路径", configRoot),
-            Pair("清除缓存", "")
+            SettingItem.TextItem("配置保存路径", configRoot) { pickDirectory() },
+            SettingItem.SwitchItem(
+                "自动开启遮罩", 
+                "启动绑定组的软件时自动开启对应遮罩", 
+                com.example.imageoverlay.model.ConfigRepository.isAutoStartOverlayEnabled(requireContext())
+            ) { isChecked ->
+                com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
+                Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
+            },
+            SettingItem.TextItem("清除缓存", "") { showClearCacheDialog() }
         )
-        adapter = SettingsAdapter(settingsList, { idx ->
-            when (idx) {
-                0 -> pickDirectory()
-                1 -> showClearCacheDialog()
-            }
-        }, { idx ->
-            if (idx == 0) pickDirectory()
-        })
+        
+        adapter = SettingsAdapter(settingsList)
         recyclerView.adapter = adapter
         return view
     }
@@ -53,8 +63,6 @@ class SettingsFragment : Fragment() {
         intent.addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION or android.content.Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         startActivityForResult(intent, REQUEST_CODE_PICK_DIR)
     }
-    
-
 
     private fun showClearCacheDialog() {
         val options = arrayOf("清理无效图片", "清除全部缓存")
@@ -183,7 +191,7 @@ class SettingsFragment : Fragment() {
             
             // 更新显示
             val newConfigRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
-            settingsList[0] = Pair("配置保存路径", newConfigRoot)
+            settingsList[0] = SettingItem.TextItem("配置保存路径", newConfigRoot) { pickDirectory() }
             adapter.notifyItemChanged(0)
             
             // 重新加载配置数据
@@ -192,30 +200,85 @@ class SettingsFragment : Fragment() {
             Toast.makeText(requireContext(), "已设置保存目录并迁移配置", Toast.LENGTH_SHORT).show()
         }
     }
+
+    override fun onResume() {
+        super.onResume()
+        // 刷新开关状态
+        val autoStartOverlay = com.example.imageoverlay.model.ConfigRepository.isAutoStartOverlayEnabled(requireContext())
+        if (settingsList.size > 1 && settingsList[1] is SettingItem.SwitchItem) {
+            settingsList[1] = SettingItem.SwitchItem(
+                "自动开启遮罩", 
+                "启动绑定组的软件时自动开启对应遮罩", 
+                autoStartOverlay
+            ) { isChecked ->
+                com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
+                Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
+            }
+            adapter.notifyItemChanged(1)
+        }
+    }
 }
 
 class SettingsAdapter(
-    private val items: List<Pair<String, String>>,
-    private val onClick: (Int) -> Unit,
-    private val onLongClick: (Int) -> Unit
-) : RecyclerView.Adapter<SettingsAdapter.ViewHolder>() {
-    class ViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+    private val items: List<SettingsFragment.SettingItem>
+) : RecyclerView.Adapter<RecyclerView.ViewHolder>() {
+    
+    companion object {
+        private const val VIEW_TYPE_TEXT = 0
+        private const val VIEW_TYPE_SWITCH = 1
+    }
+
+    class TextViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val tvTitle: TextView = itemView.findViewById(R.id.tvTitle)
         val tvValue: TextView = itemView.findViewById(R.id.tvValue)
     }
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-        val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting, parent, false)
-        return ViewHolder(view)
+
+    class SwitchViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val tvTitle: TextView = itemView.findViewById(R.id.tvTitle)
+        val tvDescription: TextView = itemView.findViewById(R.id.tvDescription)
+        val switchSetting: SwitchCompat = itemView.findViewById(R.id.switchSetting)
     }
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
-        val (title, value) = items[position]
-        holder.tvTitle.text = title
-        holder.tvValue.text = value
-        holder.itemView.setOnClickListener { onClick(position) }
-        holder.itemView.setOnLongClickListener {
-            onLongClick(position)
-            true
+
+    override fun getItemViewType(position: Int): Int {
+        return when (items[position]) {
+            is SettingsFragment.SettingItem.TextItem -> VIEW_TYPE_TEXT
+            is SettingsFragment.SettingItem.SwitchItem -> VIEW_TYPE_SWITCH
         }
     }
+
+    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder {
+        return when (viewType) {
+            VIEW_TYPE_TEXT -> {
+                val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting, parent, false)
+                TextViewHolder(view)
+            }
+            VIEW_TYPE_SWITCH -> {
+                val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting_switch, parent, false)
+                SwitchViewHolder(view)
+            }
+            else -> throw IllegalArgumentException("Unknown view type")
+        }
+    }
+
+    override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+        when (val item = items[position]) {
+            is SettingsFragment.SettingItem.TextItem -> {
+                val textHolder = holder as TextViewHolder
+                textHolder.tvTitle.text = item.title
+                textHolder.tvValue.text = item.value
+                textHolder.itemView.setOnClickListener { item.action() }
+            }
+            is SettingsFragment.SettingItem.SwitchItem -> {
+                val switchHolder = holder as SwitchViewHolder
+                switchHolder.tvTitle.text = item.title
+                switchHolder.tvDescription.text = item.description
+                switchHolder.switchSetting.isChecked = item.isChecked
+                switchHolder.switchSetting.setOnCheckedChangeListener { _, isChecked ->
+                    item.onCheckedChange(isChecked)
+                }
+            }
+        }
+    }
+
     override fun getItemCount(): Int = items.size
 } 

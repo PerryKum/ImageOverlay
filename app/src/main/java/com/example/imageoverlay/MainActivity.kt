@@ -29,8 +29,26 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
         
-        // 启动应用监听服务
+        // 启动应用监听服务（确保在后台持续运行）
         AppLaunchListenerService.startService(this)
+        android.util.Log.d("MainActivity", "应用已启动，监听服务已启动")
+        
+        // 如果之前有活跃的遮罩，恢复它
+        if (com.example.imageoverlay.model.ConfigRepository.isDefaultActive(this)) {
+            val defaultConfig = com.example.imageoverlay.model.ConfigRepository.getDefaultConfig(this)
+            if (defaultConfig != null) {
+                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                    val intent = android.content.Intent(this, com.example.imageoverlay.OverlayService::class.java)
+                    intent.putExtra("imageUri", defaultConfig.imageUri)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        startForegroundService(intent)
+                    } else {
+                        startService(intent)
+                    }
+                    android.util.Log.d("MainActivity", "已恢复之前的遮罩")
+                }, 1000) // 延迟1秒恢复
+            }
+        }
         
         // 检查是否已设置SAF路径
         val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(this)

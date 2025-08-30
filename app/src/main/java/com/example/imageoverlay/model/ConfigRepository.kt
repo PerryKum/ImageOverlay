@@ -18,6 +18,9 @@ object ConfigRepository {
     private const val KEY_DEFAULT_GROUP = "group"
     private const val KEY_DEFAULT_ACTIVE = "active"
     private const val PREF_APP_BINDINGS = "app_bindings"
+    private const val PREF_SETTINGS = "settings"
+    private const val KEY_AUTO_START_OVERLAY = "auto_start_overlay"
+    private var isServiceStarting = false // 防止服务重复启动
 
     fun load(context: Context) {
         val configFile = ConfigPathUtil.getConfigFile(context)
@@ -190,29 +193,88 @@ object ConfigRepository {
 
     // 新增：处理应用启动事件
     fun handleAppLaunch(context: Context, packageName: String) {
-        val group = getGroupByPackageName(packageName)
-        if (group != null) {
-            val defaultConfig = getGroupDefaultConfig(group.groupName)
-            if (defaultConfig != null) {
-                // 设置为全局默认遮罩
-                setDefaultConfig(context, group.groupName, defaultConfig)
-                // 激活遮罩
-                setDefaultActive(context, true)
-                
-                // 启动遮罩服务
-                try {
-                    val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
-                    intent.putExtra("imageUri", defaultConfig.imageUri)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        context.startForegroundService(intent)
+        try {
+            val group = getGroupByPackageName(packageName)
+            if (group != null) {
+                val defaultConfig = getGroupDefaultConfig(group.groupName)
+                if (defaultConfig != null) {
+                    // 检查是否自动开启遮罩
+                    if (isAutoStartOverlayEnabled(context)) {
+                        // 检查当前是否已经有相同的遮罩在运行
+                        val currentDefaultConfig = getDefaultConfig(context)
+                        val isSameConfig = currentDefaultConfig?.imageUri == defaultConfig.imageUri && isDefaultActive(context)
+                        
+                        if (!isSameConfig && !isServiceStarting) {
+                            isServiceStarting = true
+                            
+                            // 第一步：先关闭当前遮罩服务
+                            try {
+                                val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+                                context.stopService(stopIntent)
+                                setDefaultActive(context, false)
+                                android.util.Log.d("ConfigRepository", "已停止当前遮罩服务")
+                                
+                                // 等待服务完全停止
+                                Thread.sleep(50)
+                            } catch (e: Exception) {
+                                android.util.Log.e("ConfigRepository", "停止遮罩服务失败", e)
+                            }
+                            
+                            // 第二步：延迟设置新的默认配置
+                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                try {
+                                    // 设置为全局默认遮罩
+                                    setDefaultConfig(context, group.groupName, defaultConfig)
+                                    android.util.Log.d("ConfigRepository", "已设置新的默认配置")
+                                    
+                                    // 第三步：延迟启动新的遮罩服务
+                                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                                        try {
+                                            // 激活遮罩
+                                            setDefaultActive(context, true)
+                                            
+                                            // 启动遮罩服务
+                                            val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+                                            intent.putExtra("imageUri", defaultConfig.imageUri)
+                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                                context.startForegroundService(intent)
+                                            } else {
+                                                context.startService(intent)
+                                            }
+                                            android.util.Log.d("ConfigRepository", "已启动新的遮罩服务")
+                                        } catch (e: Exception) {
+                                            android.util.Log.e("ConfigRepository", "启动遮罩服务失败", e)
+                                        } finally {
+                                            isServiceStarting = false
+                                        }
+                                    }, 100) // 100毫秒延迟启动新服务
+                                } catch (e: Exception) {
+                                    android.util.Log.e("ConfigRepository", "设置默认配置失败", e)
+                                    isServiceStarting = false
+                                }
+                            }, 50) // 50毫秒延迟设置配置
+                        }
                     } else {
-                        context.startService(intent)
+                        // 仅设置全局默认遮罩，不启动服务
+                        setDefaultConfig(context, group.groupName, defaultConfig)
                     }
-                } catch (e: Exception) {
-                    android.util.Log.e("ConfigRepository", "启动遮罩服务失败", e)
                 }
             }
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "处理应用启动事件失败: $packageName", e)
         }
+    }
+
+    // 新增：设置自动开启遮罩
+    fun setAutoStartOverlayEnabled(context: Context, enabled: Boolean) {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        sp.edit().putBoolean(KEY_AUTO_START_OVERLAY, enabled).apply()
+    }
+
+    // 新增：获取自动开启遮罩设置
+    fun isAutoStartOverlayEnabled(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        return sp.getBoolean(KEY_AUTO_START_OVERLAY, false)
     }
 
     fun addGroup(context: Context, group: Group) {

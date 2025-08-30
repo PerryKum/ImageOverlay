@@ -1,12 +1,17 @@
 package com.example.imageoverlay
 
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import com.example.imageoverlay.model.ConfigRepository
 
 class AppLaunchListenerService : Service() {
@@ -39,6 +44,18 @@ class AppLaunchListenerService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 创建前台服务通知，确保服务不被系统杀死
+        createNotificationChannel()
+        val notification: Notification = NotificationCompat.Builder(this, "listener_channel")
+            .setContentTitle("应用监听服务")
+            .setContentText("正在监听应用切换")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .build()
+        startForeground(2, notification)
+        
         Log.d("AppLaunchListener", "应用启动监听服务已启动")
         return START_STICKY
     }
@@ -55,6 +72,21 @@ class AppLaunchListenerService : Service() {
         UsageStatsListener.getInstance(this).stop()
         
         Log.d("AppLaunchListener", "应用启动监听服务已销毁")
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                "listener_channel",
+                "应用监听服务",
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "用于监听应用切换的服务通知"
+                setShowBadge(false)
+            }
+            val notificationManager = getSystemService(NotificationManager::class.java)
+            notificationManager.createNotificationChannel(channel)
+        }
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

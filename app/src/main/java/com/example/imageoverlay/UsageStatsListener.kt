@@ -16,6 +16,9 @@ class UsageStatsListener(private val context: Context) {
     private var isRunning = false
     private var lastEventTime = System.currentTimeMillis()
     private var lastPackageName = ""
+    private var lastProcessTime = 0L
+    private val PROCESS_COOLDOWN = 2000L // 减少到2秒冷却时间
+    private var isProcessing = false // 防止并发处理
 
     fun start() {
         if (isRunning) return
@@ -48,13 +51,27 @@ class UsageStatsListener(private val context: Context) {
             
             if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
                 val packageName = event.packageName
-                if (packageName != lastPackageName && packageName != context.packageName) {
+                val currentTime = System.currentTimeMillis()
+                
+                if (packageName != lastPackageName && 
+                    packageName != context.packageName && 
+                    currentTime - lastProcessTime > PROCESS_COOLDOWN &&
+                    !isProcessing) {
+                    
                     lastPackageName = packageName
+                    lastProcessTime = currentTime
+                    isProcessing = true
                     Log.d("UsageStatsListener", "检测到应用启动: $packageName")
                     
                     // 在主线程中处理应用启动事件
                     handler.post {
-                        ConfigRepository.handleAppLaunch(context, packageName)
+                        try {
+                            ConfigRepository.handleAppLaunch(context, packageName)
+                        } catch (e: Exception) {
+                            Log.e("UsageStatsListener", "处理应用启动事件失败", e)
+                        } finally {
+                            isProcessing = false
+                        }
                     }
                 }
             }
