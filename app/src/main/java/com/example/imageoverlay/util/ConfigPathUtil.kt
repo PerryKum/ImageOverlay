@@ -207,14 +207,32 @@ object ConfigPathUtil {
             val docFile = DocumentFile.fromTreeUri(context, uri)
             if (docFile == null || !docFile.exists() || !docFile.isDirectory) {
                 // 如果SAF路径无效，清除设置，强制用户重新选择
+                android.util.Log.w("ConfigPathUtil", "SAF路径无效，清除设置")
                 sp.edit().remove(PREF_KEY_URI).remove(PREF_KEY_PATH).apply()
             } else {
-                // 确保现有目录都有.nomedia文件
-                ensureNomediaFiles(context, docFile)
+                // 检查权限是否有效
+                if (!hasValidPermission(context, uri)) {
+                    android.util.Log.w("ConfigPathUtil", "SAF权限无效，清除设置")
+                    sp.edit().remove(PREF_KEY_URI).remove(PREF_KEY_PATH).apply()
+                } else {
+                    // 确保现有目录都有.nomedia文件
+                    ensureNomediaFiles(context, docFile)
+                }
             }
         } else {
             // 如果没有设置SAF路径，不创建默认路径，强制用户选择
             // 这里不做任何操作，让用户必须选择SAF路径
+        }
+    }
+    
+    private fun hasValidPermission(context: Context, uri: Uri): Boolean {
+        return try {
+            // 尝试访问目录来验证权限
+            val docFile = DocumentFile.fromTreeUri(context, uri)
+            docFile?.exists() == true && docFile.isDirectory
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigPathUtil", "权限检查失败", e)
+            false
         }
     }
     

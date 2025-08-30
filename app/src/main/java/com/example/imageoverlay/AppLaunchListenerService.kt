@@ -31,16 +31,20 @@ class AppLaunchListenerService : Service() {
         super.onCreate()
         Log.d("AppLaunchListener", "应用启动监听服务已创建")
         
-        // 注册广播接收器监听应用安装/更新
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_PACKAGE_ADDED)
-            addAction(Intent.ACTION_PACKAGE_REPLACED)
-            addDataScheme("package")
+        try {
+            // 注册广播接收器监听应用安装/更新
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REPLACED)
+                addDataScheme("package")
+            }
+            registerReceiver(appLaunchReceiver, filter)
+            
+            // 启动使用情况监听
+            UsageStatsListener.getInstance(this).start()
+        } catch (e: Exception) {
+            Log.e("AppLaunchListener", "服务创建时出现异常", e)
         }
-        registerReceiver(appLaunchReceiver, filter)
-        
-        // 启动使用情况监听
-        UsageStatsListener.getInstance(this).start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {

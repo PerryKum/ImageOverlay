@@ -14,50 +14,99 @@ class MainActivity : AppCompatActivity() {
     
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        com.example.imageoverlay.util.ConfigPathUtil.checkAndFixRoot(this)
-        setContentView(R.layout.activity_main)
         
-        // 检查使用情况访问权限
-        if (!com.example.imageoverlay.util.UsagePermissionUtil.hasUsageStatsPermission(this)) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("需要权限")
-                .setMessage("应用需要访问使用情况权限来监听应用启动。请在设置中授权。")
-                .setPositiveButton("去设置") { _, _ ->
-                    com.example.imageoverlay.util.UsagePermissionUtil.openUsageStatsSettings(this)
-                }
-                .setNegativeButton("取消", null)
-                .show()
+        try {
+            com.example.imageoverlay.util.ConfigPathUtil.checkAndFixRoot(this)
+            setContentView(R.layout.activity_main)
+            
+            // 检查使用情况访问权限
+            if (!com.example.imageoverlay.util.UsagePermissionUtil.hasUsageStatsPermission(this)) {
+                android.app.AlertDialog.Builder(this)
+                    .setTitle("需要权限")
+                    .setMessage("应用需要访问使用情况权限来监听应用启动。请在设置中授权。")
+                    .setPositiveButton("去设置") { _, _ ->
+                        com.example.imageoverlay.util.UsagePermissionUtil.openUsageStatsSettings(this)
+                    }
+                    .setNegativeButton("取消", null)
+                    .show()
+            }
+            
+            // 启动应用监听服务（确保在后台持续运行）
+            try {
+                AppLaunchListenerService.startService(this)
+                android.util.Log.d("MainActivity", "应用已启动，监听服务已启动")
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "启动监听服务失败", e)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "onCreate出现异常", e)
+            // 即使出现异常也要设置基本UI
+            setContentView(R.layout.activity_main)
         }
         
-        // 启动应用监听服务（确保在后台持续运行）
-        AppLaunchListenerService.startService(this)
-        android.util.Log.d("MainActivity", "应用已启动，监听服务已启动")
-        
         // 如果之前有活跃的遮罩，恢复它
-        if (com.example.imageoverlay.model.ConfigRepository.isDefaultActive(this)) {
-            val defaultConfig = com.example.imageoverlay.model.ConfigRepository.getDefaultConfig(this)
-            if (defaultConfig != null) {
-                android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                    val intent = android.content.Intent(this, com.example.imageoverlay.OverlayService::class.java)
-                    intent.putExtra("imageUri", defaultConfig.imageUri)
-                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                        startForegroundService(intent)
-                    } else {
-                        startService(intent)
+        try {
+            if (com.example.imageoverlay.model.ConfigRepository.isDefaultActive(this)) {
+                val defaultConfig = com.example.imageoverlay.model.ConfigRepository.getDefaultConfig(this)
+                if (defaultConfig != null && defaultConfig.imageUri.isNotBlank()) {
+                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                        try {
+                            val intent = android.content.Intent(this, com.example.imageoverlay.OverlayService::class.java)
+                            intent.putExtra("imageUri", defaultConfig.imageUri)
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                                startForegroundService(intent)
+                            } else {
+                                startService(intent)
+                            }
+                            android.util.Log.d("MainActivity", "已恢复之前的遮罩")
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "恢复遮罩失败", e)
+                            // 恢复失败时清除状态
+                            try {
+                                com.example.imageoverlay.model.ConfigRepository.setDefaultActive(this, false)
+                            } catch (ex: Exception) {
+                                android.util.Log.e("MainActivity", "清除遮罩状态失败", ex)
+                            }
+                        }
+                    }, 2000) // 延迟2秒恢复，给系统更多时间初始化
+                } else {
+                    // 配置无效时清除状态
+                    android.util.Log.w("MainActivity", "默认配置无效，清除状态")
+                    try {
+                        com.example.imageoverlay.model.ConfigRepository.setDefaultActive(this, false)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "清除遮罩状态失败", e)
                     }
-                    android.util.Log.d("MainActivity", "已恢复之前的遮罩")
-                }, 1000) // 延迟1秒恢复
+                }
             }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "检查遮罩状态失败", e)
         }
         
         // 检查是否已设置SAF路径
-        val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(this)
-        if (configRoot.isNotBlank()) {
-            com.example.imageoverlay.model.ConfigRepository.load(this)
-            setupNavigation()
-        } else if (!isDialogShowing) {
-            // 如果没有设置SAF路径且对话框未显示，强制用户选择
-            showForcePickDirectoryDialog()
+        try {
+            val configRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(this)
+            if (configRoot.isNotBlank()) {
+                try {
+                    com.example.imageoverlay.model.ConfigRepository.load(this)
+                    setupNavigation()
+                } catch (e: Exception) {
+                    android.util.Log.e("MainActivity", "加载配置失败", e)
+                    // 配置加载失败时显示选择目录对话框
+                    if (!isDialogShowing) {
+                        showForcePickDirectoryDialog()
+                    }
+                }
+            } else if (!isDialogShowing) {
+                // 如果没有设置SAF路径且对话框未显示，强制用户选择
+                showForcePickDirectoryDialog()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "检查配置路径失败", e)
+            // 出现异常时显示选择目录对话框
+            if (!isDialogShowing) {
+                showForcePickDirectoryDialog()
+            }
         }
     }
     
@@ -113,11 +162,17 @@ class MainActivity : AppCompatActivity() {
         if (requestCode == REQUEST_CODE_PICK_DIR && resultCode == android.app.Activity.RESULT_OK) {
             val uri = data?.data ?: return
             try {
+                // 获取持久化权限
                 contentResolver.takePersistableUriPermission(
                     uri,
                     android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                 )
-            } catch (_: Exception) {}
+                android.util.Log.d("MainActivity", "已获取SAF持久化权限")
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "获取SAF权限失败", e)
+                android.widget.Toast.makeText(this, "获取存储权限失败，请重试", android.widget.Toast.LENGTH_SHORT).show()
+                return
+            }
             
             // 设置新的配置路径（会自动迁移配置）
             com.example.imageoverlay.util.ConfigPathUtil.setConfigRootUri(this, uri)

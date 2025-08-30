@@ -23,63 +23,133 @@ object ConfigRepository {
     private var isServiceStarting = false // 防止服务重复启动
 
     fun load(context: Context) {
-        val configFile = ConfigPathUtil.getConfigFile(context)
-        val uriStr = ConfigPathUtil.getConfigRoot(context)
-        if (uriStr.startsWith("content://")) {
-            // SAF方式读取
-            try {
-                val rootUri = Uri.parse(uriStr)
-                val rootDoc =
-                    androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
-                // 统一在 ImageOverlay 目录下读写 config.json
-                val overlayDoc = rootDoc?.findFile("ImageOverlay")
-                    ?: rootDoc?.createDirectory("ImageOverlay")
-                var configDoc = overlayDoc?.findFile("config.json")
-                if (configDoc == null) {
-                    configDoc = overlayDoc?.createFile("application/json", "config.json")
-                    // 写入空数组
-                    configDoc?.uri?.let { uri ->
-                        context.contentResolver.openOutputStream(uri, "wt")
-                            ?.use { it.write("[]".toByteArray()) }
+        try {
+            val configFile = ConfigPathUtil.getConfigFile(context)
+            val uriStr = ConfigPathUtil.getConfigRoot(context)
+            
+            if (uriStr.isBlank()) {
+                android.util.Log.w("ConfigRepository", "配置路径为空，使用空列表")
+                groupList = mutableListOf()
+                return
+            }
+            
+            if (uriStr.startsWith("content://")) {
+                // SAF方式读取
+                try {
+                    val rootUri = Uri.parse(uriStr)
+                    val rootDoc =
+                        androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
+                    
+                    if (rootDoc == null || !rootDoc.exists()) {
+                        android.util.Log.w("ConfigRepository", "SAF根目录不存在，使用空列表")
+                        groupList = mutableListOf()
+                        return
                     }
-                }
-                val inputStream =
-                    configDoc?.uri?.let { context.contentResolver.openInputStream(it) }
-                if (inputStream != null) {
-                    val reader = InputStreamReader(inputStream)
-                    val json = reader.readText()
-                    reader.close()
-                    inputStream.close()
-                    if (json.isNotBlank()) {
-                        val type = object : TypeToken<MutableList<Group>>() {}.type
-                        groupList = gson.fromJson(json, type) ?: mutableListOf()
+                    
+                    // 检查权限是否有效
+                    if (!hasValidSafPermission(context, rootUri)) {
+                        android.util.Log.w("ConfigRepository", "SAF权限无效，使用空列表")
+                        groupList = mutableListOf()
+                        return
+                    }
+                    
+                    // 统一在 ImageOverlay 目录下读写 config.json
+                    val overlayDoc = rootDoc.findFile("ImageOverlay")
+                        ?: rootDoc.createDirectory("ImageOverlay")
+                    
+                    if (overlayDoc == null) {
+                        android.util.Log.w("ConfigRepository", "无法创建ImageOverlay目录，使用空列表")
+                        groupList = mutableListOf()
+                        return
+                    }
+                    
+                    var configDoc = overlayDoc.findFile("config.json")
+                    if (configDoc == null) {
+                        configDoc = overlayDoc.createFile("application/json", "config.json")
+                        // 写入空数组
+                        configDoc?.uri?.let { uri ->
+                            context.contentResolver.openOutputStream(uri, "wt")
+                                ?.use { it.write("[]".toByteArray()) }
+                        }
+                    }
+                    
+                    if (configDoc == null) {
+                        android.util.Log.w("ConfigRepository", "无法创建config.json文件，使用空列表")
+                        groupList = mutableListOf()
+                        return
+                    }
+                    
+                    val inputStream =
+                        configDoc.uri?.let { context.contentResolver.openInputStream(it) }
+                    if (inputStream != null) {
+                        val reader = InputStreamReader(inputStream)
+                        val json = reader.readText()
+                        reader.close()
+                        inputStream.close()
+                        if (json.isNotBlank()) {
+                            val type = object : TypeToken<MutableList<Group>>() {}.type
+                            groupList = gson.fromJson(json, type) ?: mutableListOf()
+                        } else {
+                            groupList = mutableListOf()
+                        }
                     } else {
                         groupList = mutableListOf()
                     }
-                } else {
-                    groupList = mutableListOf()
-                }
-            } catch (e: Exception) {
-                groupList = mutableListOf()
-            }
-        } else {
-            // 普通文件方式
-            if (!configFile.exists()) {
-                configFile.writeText("[]")
-            }
-            if (configFile.exists()) {
-                val json = configFile.readText()
-                if (json.isNotBlank()) {
-                    val type = object : TypeToken<MutableList<Group>>() {}.type
-                    groupList = gson.fromJson(json, type) ?: mutableListOf()
-                } else {
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "SAF方式读取配置失败", e)
                     groupList = mutableListOf()
                 }
             } else {
-                groupList = mutableListOf()
+                // 普通文件方式
+                try {
+                    if (!configFile.exists()) {
+                        configFile.writeText("[]")
+                    }
+                    if (configFile.exists()) {
+                        val json = configFile.readText()
+                        if (json.isNotBlank()) {
+                            val type = object : TypeToken<MutableList<Group>>() {}.type
+                            groupList = gson.fromJson(json, type) ?: mutableListOf()
+                        } else {
+                            groupList = mutableListOf()
+                        }
+                    } else {
+                        groupList = mutableListOf()
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "普通文件方式读取配置失败", e)
+                    groupList = mutableListOf()
+                }
             }
+            android.util.Log.d("ConfigRepository", "配置加载完成，共${groupList.size}个组")
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "配置加载出现未知异常", e)
+            groupList = mutableListOf()
         }
         // no-op: default config is stored separately in SharedPreferences
+    }
+    
+    private fun hasValidSafPermission(context: Context, uri: Uri): Boolean {
+        return try {
+            // 检查是否有持久化权限
+            val flags = context.contentResolver.getPersistedUriPermissions()
+            val hasPermission = flags.any { permission ->
+                permission.uri == uri && 
+                (permission.isReadPermission || permission.isWritePermission)
+            }
+            
+            if (!hasPermission) {
+                android.util.Log.w("ConfigRepository", "没有SAF持久化权限")
+                return false
+            }
+            
+            // 尝试访问目录来验证权限
+            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+            docFile?.exists() == true && docFile.isDirectory
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "SAF权限检查失败", e)
+            false
+        }
     }
 
     fun save(context: Context) {
