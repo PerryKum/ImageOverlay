@@ -9,6 +9,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import android.widget.TextView
 import android.widget.Toast
+import android.widget.SeekBar
 import android.app.AlertDialog
 import android.widget.EditText
 import com.example.imageoverlay.util.ConfigPathUtil
@@ -27,6 +28,7 @@ class SettingsFragment : Fragment() {
     sealed class SettingItem {
         data class TextItem(val title: String, val value: String, val action: () -> Unit) : SettingItem()
         data class SwitchItem(val title: String, val description: String, val isChecked: Boolean, val onCheckedChange: (Boolean) -> Unit) : SettingItem()
+        data class SliderItem(val title: String, val description: String, val value: Int, val maxValue: Int, val onValueChange: (Int) -> Unit) : SettingItem()
     }
 
     override fun onCreateView(
@@ -49,6 +51,29 @@ class SettingsFragment : Fragment() {
             ) { isChecked ->
                 com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
                 Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
+            },
+            SettingItem.SliderItem(
+                "全局遮罩透明度",
+                "设置所有遮罩的透明度值",
+                com.example.imageoverlay.model.ConfigRepository.getDefaultOpacity(requireContext()),
+                100
+            ) { value ->
+                // 防抖处理：延迟保存，避免频繁调整时的重复保存
+                com.example.imageoverlay.model.ConfigRepository.setDefaultOpacity(requireContext(), value)
+                
+                // 实时更新所有正在运行的遮罩的透明度
+                try {
+                    // 发送广播通知所有遮罩服务更新透明度
+                    val intent = android.content.Intent(requireContext(), com.example.imageoverlay.OverlayService::class.java)
+                    intent.putExtra("updateOpacity", value)
+                    if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                        requireContext().startForegroundService(intent)
+                    } else {
+                        requireContext().startService(intent)
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("SettingsFragment", "更新透明度失败", e)
+                }
             },
             SettingItem.TextItem("清除缓存", "") { showClearCacheDialog() }
         )
@@ -226,6 +251,7 @@ class SettingsAdapter(
     companion object {
         private const val VIEW_TYPE_TEXT = 0
         private const val VIEW_TYPE_SWITCH = 1
+        private const val VIEW_TYPE_SLIDER = 2
     }
 
     class TextViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -239,10 +265,18 @@ class SettingsAdapter(
         val switchSetting: SwitchCompat = itemView.findViewById(R.id.switchSetting)
     }
 
+    class SliderViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val tvTitle: TextView = itemView.findViewById(R.id.tvTitle)
+        val tvDescription: TextView = itemView.findViewById(R.id.tvDescription)
+        val seekBarSetting: android.widget.SeekBar = itemView.findViewById(R.id.seekBarSetting)
+        val tvValue: TextView = itemView.findViewById(R.id.tvValue)
+    }
+
     override fun getItemViewType(position: Int): Int {
         return when (items[position]) {
             is SettingsFragment.SettingItem.TextItem -> VIEW_TYPE_TEXT
             is SettingsFragment.SettingItem.SwitchItem -> VIEW_TYPE_SWITCH
+            is SettingsFragment.SettingItem.SliderItem -> VIEW_TYPE_SLIDER
         }
     }
 
@@ -255,6 +289,10 @@ class SettingsAdapter(
             VIEW_TYPE_SWITCH -> {
                 val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting_switch, parent, false)
                 SwitchViewHolder(view)
+            }
+            VIEW_TYPE_SLIDER -> {
+                val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting_slider, parent, false)
+                SliderViewHolder(view)
             }
             else -> throw IllegalArgumentException("Unknown view type")
         }
@@ -276,6 +314,42 @@ class SettingsAdapter(
                 switchHolder.switchSetting.setOnCheckedChangeListener { _, isChecked ->
                     item.onCheckedChange(isChecked)
                 }
+            }
+            is SettingsFragment.SettingItem.SliderItem -> {
+                val sliderHolder = holder as SliderViewHolder
+                sliderHolder.tvTitle.text = item.title
+                sliderHolder.tvDescription.text = item.description
+                sliderHolder.seekBarSetting.max = item.maxValue
+                sliderHolder.seekBarSetting.progress = item.value
+                sliderHolder.tvValue.text = "${item.value}%"
+                
+                // 防抖处理：使用Handler延迟执行保存操作
+                var saveHandler: android.os.Handler? = null
+                var saveRunnable: Runnable? = null
+                
+                sliderHolder.seekBarSetting.setOnSeekBarChangeListener(object : android.widget.SeekBar.OnSeekBarChangeListener {
+                    override fun onProgressChanged(seekBar: android.widget.SeekBar?, progress: Int, fromUser: Boolean) {
+                        if (fromUser) {
+                            sliderHolder.tvValue.text = "${progress}%"
+                            
+                            // 取消之前的延迟保存
+                            saveHandler?.removeCallbacks(saveRunnable ?: return)
+                            
+                            // 创建新的延迟保存任务
+                            saveRunnable = Runnable {
+                                item.onValueChange(progress)
+                            }
+                            
+                            // 延迟500毫秒执行保存，实现防抖
+                            if (saveHandler == null) {
+                                saveHandler = android.os.Handler(android.os.Looper.getMainLooper())
+                            }
+                            saveHandler?.postDelayed(saveRunnable!!, 500)
+                        }
+                    }
+                    override fun onStartTrackingTouch(seekBar: android.widget.SeekBar?) {}
+                    override fun onStopTrackingTouch(seekBar: android.widget.SeekBar?) {}
+                })
             }
         }
     }

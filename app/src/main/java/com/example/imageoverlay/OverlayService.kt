@@ -17,18 +17,32 @@ class OverlayService : Service() {
     private var windowManager: WindowManager? = null
     private var imageView: ImageView? = null
     private var currentImageUri: String? = null
+    private var currentOpacity: Int = 100
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            val newImageUri = intent?.getStringExtra("imageUri")
-            
-            // 检查是否是相同的图片URI，如果是则不重复处理
-            if (newImageUri == currentImageUri && imageView != null) {
-                android.util.Log.d("OverlayService", "相同图片URI，跳过处理")
+            // 检查是否是透明度更新请求
+            val opacityValue = intent?.getIntExtra("updateOpacity", -1) ?: -1
+            if (opacityValue != -1) {
+                // 更新透明度
+                updateOpacity(opacityValue)
                 return START_STICKY
             }
             
-            android.util.Log.d("OverlayService", "开始处理新遮罩: $newImageUri")
+            val newImageUri = intent?.getStringExtra("imageUri")
+            // 如果没有传递透明度参数，使用全局透明度设置
+            val newOpacity = when (val opacity = intent?.getIntExtra("opacity", -1) ?: -1) {
+                -1 -> com.example.imageoverlay.model.ConfigRepository.getDefaultOpacity(this)
+                else -> opacity
+            }
+            
+            // 检查是否是相同的图片URI和透明度，如果是则不重复处理
+            if (newImageUri == currentImageUri && newOpacity == currentOpacity && imageView != null) {
+                android.util.Log.d("OverlayService", "相同图片URI和透明度，跳过处理")
+                return START_STICKY
+            }
+            
+            android.util.Log.d("OverlayService", "开始处理新遮罩: $newImageUri, 透明度: $newOpacity")
             
             // 先清理之前的遮罩
             removeOverlay()
@@ -36,7 +50,8 @@ class OverlayService : Service() {
             val imageUri = newImageUri?.let { Uri.parse(it) }
             if (imageUri != null) {
                 currentImageUri = newImageUri
-                showOverlay(imageUri)
+                currentOpacity = newOpacity
+                showOverlay(imageUri, newOpacity)
                 android.util.Log.d("OverlayService", "遮罩显示成功")
             }
             
@@ -59,12 +74,16 @@ class OverlayService : Service() {
         return START_STICKY
     }
 
-    private fun showOverlay(imageUri: Uri) {
+    private fun showOverlay(imageUri: Uri, opacity: Int) {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             imageView = ImageView(this)
             imageView?.setImageURI(imageUri)
             imageView?.scaleType = ImageView.ScaleType.FIT_XY
+            
+            // 设置透明度
+            val alpha = opacity / 100f
+            imageView?.alpha = alpha
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -99,6 +118,14 @@ class OverlayService : Service() {
                 // 忽略移除视图时的异常
             }
             imageView = null
+        }
+    }
+
+    fun updateOpacity(opacity: Int) {
+        currentOpacity = opacity
+        imageView?.let { view ->
+            val alpha = opacity / 100f
+            view.alpha = alpha
         }
     }
 

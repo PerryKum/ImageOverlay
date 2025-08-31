@@ -20,6 +20,10 @@ class DefaultToggleTileService : TileService() {
 
     override fun onClick() {
         super.onClick()
+        toggleOverlay()
+    }
+
+    private fun toggleOverlay() {
         val currentlyActive = ConfigRepository.isDefaultActive(this)
         if (currentlyActive) {
             // turn off
@@ -29,14 +33,15 @@ class DefaultToggleTileService : TileService() {
         } else {
             // turn on – ensure overlay permission
             if (!PermissionUtil.checkOverlayPermission(this)) {
-                // Show settings; tile cannot launch for result, but we can open settings
-                PermissionUtil.openOverlayPermissionSettings(this)
+                // 在磁贴中不跳转权限设置页面，静默处理
+                android.util.Log.w("DefaultToggleTileService", "Overlay permission not granted")
                 return
             }
             val imageUri = ConfigRepository.getDefaultConfig(this)?.imageUri
             if (imageUri != null) {
                 val intent = Intent(this, OverlayService::class.java)
                 intent.putExtra("imageUri", imageUri)
+                intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(this))
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     startForegroundService(intent)
                 } else {
@@ -52,6 +57,8 @@ class DefaultToggleTileService : TileService() {
         qsTile?.state = if (ConfigRepository.isDefaultActive(this)) Tile.STATE_ACTIVE else Tile.STATE_INACTIVE
         qsTile?.updateTile()
     }
+
+
 
 }
 

@@ -71,6 +71,7 @@ class ConfigFragment : Fragment() {
 					ConfigRepository.save(requireContext())
 					val intent = android.content.Intent(requireContext(), OverlayService::class.java)
 					intent.putExtra("imageUri", def.imageUri)
+					// 不传递透明度参数，让OverlayService使用全局透明度设置
 					if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
 						requireContext().startForegroundService(intent)
 					} else {

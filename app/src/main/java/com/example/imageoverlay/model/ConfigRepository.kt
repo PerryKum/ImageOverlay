@@ -17,6 +17,7 @@ object ConfigRepository {
     private const val KEY_DEFAULT_URI = "uri"
     private const val KEY_DEFAULT_GROUP = "group"
     private const val KEY_DEFAULT_ACTIVE = "active"
+    private const val KEY_DEFAULT_OPACITY = "opacity"
     private const val PREF_APP_BINDINGS = "app_bindings"
     private const val PREF_SETTINGS = "settings"
     private const val KEY_AUTO_START_OVERLAY = "auto_start_overlay"
@@ -216,6 +217,16 @@ object ConfigRepository {
         return sp.getBoolean(KEY_DEFAULT_ACTIVE, false)
     }
 
+    fun setDefaultOpacity(context: Context, opacity: Int) {
+        val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
+        sp.edit().putInt(KEY_DEFAULT_OPACITY, opacity).apply()
+    }
+
+    fun getDefaultOpacity(context: Context): Int {
+        val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
+        return sp.getInt(KEY_DEFAULT_OPACITY, 100)
+    }
+
     fun clearDefaultConfig(context: Context) {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
         sp.edit()
@@ -306,6 +317,7 @@ object ConfigRepository {
                                             // 启动遮罩服务
                                             val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
                                             intent.putExtra("imageUri", defaultConfig.imageUri)
+                                            intent.putExtra("opacity", getDefaultOpacity(context))
                                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                                                 context.startForegroundService(intent)
                                             } else {

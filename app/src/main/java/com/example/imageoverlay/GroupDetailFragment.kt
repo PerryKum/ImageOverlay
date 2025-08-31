@@ -273,6 +273,7 @@ class GroupDetailFragment : Fragment() {
                 if (PermissionUtil.checkOverlayPermission(requireContext())) {
                     val intent = Intent(requireContext(), OverlayService::class.java)
                     intent.putExtra("imageUri", config.imageUri)
+                    // 不传递透明度参数，让OverlayService使用全局透明度设置
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         requireContext().startForegroundService(intent)
                     } else {

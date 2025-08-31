@@ -8,4 +8,9 @@
     <string name="tab_config">建立配置</string>
     <string name="tab_settings">设置</string>
     <string name="tile_default_toggle">默认遮罩</string>
+    <string name="tile_settings">磁贴设置</string>
+    <string name="toggle_overlay">开关遮罩</string>
+    <string name="adjust_opacity">调整透明度</string>
+    <string name="cancel">取消</string>
+    <string name="apply">应用</string>
 </resources> 
