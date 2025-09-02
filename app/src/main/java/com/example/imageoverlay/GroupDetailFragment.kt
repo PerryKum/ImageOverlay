@@ -82,6 +82,12 @@ class GroupDetailFragment : Fragment() {
         return view
     }
 
+    override fun onResume() {
+        super.onResume()
+        // 强制同步预设配置状态
+        forceSyncPresetState()
+    }
+
     private fun getCurrentGroup(): Group? {
         return groupName?.let { name ->
             ConfigRepository.getGroups().find { it.groupName == name }
@@ -260,6 +266,31 @@ class GroupDetailFragment : Fragment() {
                 return
             }
             
+            // 操作前先检查并同步状态
+            val currentServiceRunning = isOverlayServiceRunning()
+            val hasActiveConfig = ConfigRepository.getGroups().any { group ->
+                group.configs.any { it.active }
+            }
+            
+            // 如果状态不一致，先同步
+            if (hasActiveConfig != currentServiceRunning) {
+                android.util.Log.w("GroupDetailFragment", "操作前检测到状态不同步，先同步: 有激活配置=$hasActiveConfig, 服务状态=$currentServiceRunning")
+                
+                if (hasActiveConfig && !currentServiceRunning) {
+                    // 有激活配置但服务未运行 - 清理所有激活状态
+                    ConfigRepository.getGroups().forEach { group ->
+                        group.configs.forEach { config ->
+                            config.active = false
+                        }
+                    }
+                    ConfigRepository.save(requireContext())
+                    
+                    android.widget.Toast.makeText(requireContext(), "状态已同步，请重新操作", android.widget.Toast.LENGTH_SHORT).show()
+                    refreshConfigList()
+                    return
+                }
+            }
+            
             if (!config.active) {
                 // 全局只允许一个绿点
                 ConfigRepository.getGroups().forEach { group ->
@@ -413,6 +444,85 @@ class GroupDetailFragment : Fragment() {
             .setNegativeButton("取消", null)
             .create()
         dialog.show()
+    }
+    
+    /**
+     * 检查遮罩服务是否正在运行
+     */
+    private fun isOverlayServiceRunning(): Boolean {
+        // 检查前台服务通知
+        val notificationManager = requireContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
+        val activeNotifications = notificationManager.activeNotifications
+        val hasOverlayNotification = activeNotifications.any { notification ->
+            notification.id == 1
+        }
+        
+        if (hasOverlayNotification) {
+            return true
+        }
+        
+        // 检查ActivityManager中的服务状态
+        val activityManager = requireContext().getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+        val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
+        return runningServices.any { service ->
+            service.service.className == "com.example.imageoverlay.OverlayService"
+        }
+    }
+    
+    /**
+     * 强制同步预设配置状态
+     */
+    private fun forceSyncPresetState() {
+        try {
+            val currentServiceRunning = isOverlayServiceRunning()
+            val hasActiveConfig = ConfigRepository.getGroups().any { group ->
+                group.configs.any { it.active }
+            }
+            
+            android.util.Log.d("GroupDetailFragment", "forceSyncPresetState: 服务状态=$currentServiceRunning, 有激活配置=$hasActiveConfig")
+            
+            if (hasActiveConfig && !currentServiceRunning) {
+                // 有激活配置但服务未运行 - 清理状态
+                android.util.Log.w("GroupDetailFragment", "检测到预设遮罩状态不同步，清理无效状态")
+                
+                ConfigRepository.getGroups().forEach { group ->
+                    group.configs.forEach { config ->
+                        if (config.active) {
+                            android.util.Log.w("GroupDetailFragment", "清理组配置激活状态: ${group.groupName}/${config.configName}")
+                            config.active = false
+                        }
+                    }
+                }
+                ConfigRepository.save(requireContext())
+                
+                // 刷新界面
+                refreshConfigList()
+                adapter = ConfigAdapter(requireContext(), configList, { idx ->
+                    onConfigStatusClick(idx)
+                }, { idx ->
+                    onConfigItemClick(idx)
+                }, { idx ->
+                    showConfigContextMenu(idx)
+                }, getCurrentGroup()?.defaultConfigName)
+                recyclerView.adapter = adapter
+                
+                android.widget.Toast.makeText(requireContext(), "检测到预设遮罩已停止，状态已同步", android.widget.Toast.LENGTH_SHORT).show()
+            } else if (!hasActiveConfig && currentServiceRunning) {
+                // 没有激活配置但服务在运行 - 同步状态
+                android.util.Log.w("GroupDetailFragment", "检测到预设遮罩正在运行，同步状态")
+                
+                // 找到当前运行的配置并激活
+                val currentGroup = getCurrentGroup()
+                if (currentGroup != null) {
+                    // 这里可以根据需要设置当前组为激活状态
+                    // 或者保持现状，因为服务可能是在其他Fragment中启动的
+                }
+                
+                android.widget.Toast.makeText(requireContext(), "检测到预设遮罩正在运行，状态已同步", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("GroupDetailFragment", "forceSyncPresetState异常", e)
+        }
     }
 
     companion object {

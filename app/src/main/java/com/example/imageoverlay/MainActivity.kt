@@ -46,6 +46,7 @@ class MainActivity : AppCompatActivity() {
         
         // 如果之前有活跃的遮罩，恢复它
         try {
+            // 检查预设模式的默认遮罩
             if (com.example.imageoverlay.model.ConfigRepository.isDefaultActive(this)) {
                 val defaultConfig = com.example.imageoverlay.model.ConfigRepository.getDefaultConfig(this)
                 if (defaultConfig != null && defaultConfig.imageUri.isNotBlank()) {
@@ -58,14 +59,14 @@ class MainActivity : AppCompatActivity() {
                             } else {
                                 startService(intent)
                             }
-                            android.util.Log.d("MainActivity", "已恢复之前的遮罩")
+                            android.util.Log.d("MainActivity", "已恢复预设遮罩")
                         } catch (e: Exception) {
-                            android.util.Log.e("MainActivity", "恢复遮罩失败", e)
+                            android.util.Log.e("MainActivity", "恢复预设遮罩失败", e)
                             // 恢复失败时清除状态
                             try {
                                 com.example.imageoverlay.model.ConfigRepository.setDefaultActive(this, false)
                             } catch (ex: Exception) {
-                                android.util.Log.e("MainActivity", "清除遮罩状态失败", ex)
+                                android.util.Log.e("MainActivity", "清除预设遮罩状态失败", ex)
                             }
                         }
                     }, 2000) // 延迟2秒恢复，给系统更多时间初始化
@@ -75,7 +76,38 @@ class MainActivity : AppCompatActivity() {
                     try {
                         com.example.imageoverlay.model.ConfigRepository.setDefaultActive(this, false)
                     } catch (e: Exception) {
-                        android.util.Log.e("MainActivity", "清除遮罩状态失败", e)
+                        android.util.Log.e("MainActivity", "清除预设遮罩状态失败", e)
+                    }
+                }
+            } else {
+                // 快速启动模式：不自动恢复，让用户手动控制
+                // 只清理无效的状态
+                val quickUsePrefs = getSharedPreferences("quick_use_prefs", 0)
+                val isQuickUseActive = quickUsePrefs.getBoolean("is_overlay_active", false)
+                val quickUseImageUri = quickUsePrefs.getString("image_uri", null)
+                
+                if (isQuickUseActive && !quickUseImageUri.isNullOrBlank()) {
+                    // 验证图片URI权限是否有效
+                    val uri = try {
+                        android.net.Uri.parse(quickUseImageUri)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "解析快速启动图片URI失败", e)
+                        null
+                    }
+                    
+                    val hasValidPermission = uri?.let { checkUriPermission(it) } ?: false
+                    
+                    if (!hasValidPermission) {
+                        // 权限无效，清除状态
+                        android.util.Log.w("MainActivity", "快速启动图片URI权限无效，清除状态")
+                        try {
+                            quickUsePrefs.edit()
+                                .putBoolean("is_overlay_active", false)
+                                .remove("image_uri")
+                                .apply()
+                        } catch (e: Exception) {
+                            android.util.Log.e("MainActivity", "清除快速启动状态失败", e)
+                        }
                     }
                 }
             }
@@ -199,5 +231,29 @@ class MainActivity : AppCompatActivity() {
         supportFragmentManager.beginTransaction()
             .replace(R.id.fragment_container, fragment)
             .commit()
+    }
+    
+    private fun checkUriPermission(uri: android.net.Uri): Boolean {
+        return try {
+            // 检查是否有持久化权限
+            val flags = contentResolver.getPersistedUriPermissions()
+            val hasPermission = flags.any { permission ->
+                permission.uri == uri && permission.isReadPermission
+            }
+            
+            if (!hasPermission) {
+                android.util.Log.w("MainActivity", "没有持久化权限: $uri")
+                return false
+            }
+            
+            // 尝试访问URI来验证权限是否真的有效
+            contentResolver.openInputStream(uri)?.use {
+                // 如果能成功打开，说明权限有效
+                true
+            } ?: false
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "检查URI权限失败: $uri", e)
+            false
+        }
     }
 } 

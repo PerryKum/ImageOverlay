@@ -30,6 +30,12 @@ class OverlayService : Service() {
             }
             
             val newImageUri = intent?.getStringExtra("imageUri")
+            if (newImageUri.isNullOrBlank()) {
+                android.util.Log.w("OverlayService", "图片URI为空，停止服务")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            
             // 如果没有传递透明度参数，使用全局透明度设置
             val newOpacity = when (val opacity = intent?.getIntExtra("opacity", -1) ?: -1) {
                 -1 -> com.example.imageoverlay.model.ConfigRepository.getDefaultOpacity(this)
@@ -47,12 +53,25 @@ class OverlayService : Service() {
             // 先清理之前的遮罩
             removeOverlay()
             
-            val imageUri = newImageUri?.let { Uri.parse(it) }
+            val imageUri = try {
+                Uri.parse(newImageUri)
+            } catch (e: Exception) {
+                android.util.Log.e("OverlayService", "解析图片URI失败: $newImageUri", e)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            
             if (imageUri != null) {
                 currentImageUri = newImageUri
                 currentOpacity = newOpacity
-                showOverlay(imageUri, newOpacity)
+                val success = showOverlay(imageUri, newOpacity)
+                if (success) {
                 android.util.Log.d("OverlayService", "遮罩显示成功")
+                } else {
+                    android.util.Log.e("OverlayService", "遮罩显示失败")
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
             }
             
             // 确保前台服务通知
@@ -67,18 +86,36 @@ class OverlayService : Service() {
                 .build()
             startForeground(1, notification)
             
+
+            
             android.util.Log.d("OverlayService", "前台服务已启动")
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "onStartCommand异常", e)
+            // 出现异常时停止服务，避免无限重启
+            stopSelf()
+            return START_NOT_STICKY
         }
         return START_STICKY
     }
 
-    private fun showOverlay(imageUri: Uri, opacity: Int) {
-        try {
+    private fun showOverlay(imageUri: Uri, opacity: Int): Boolean {
+        return try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             imageView = ImageView(this)
+            
+            // 验证图片URI是否有效
+            try {
             imageView?.setImageURI(imageUri)
+                // 检查图片是否成功加载
+                if (imageView?.drawable == null) {
+                    android.util.Log.e("OverlayService", "图片加载失败: $imageUri")
+                    return false
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("OverlayService", "设置图片失败: $imageUri", e)
+                return false
+            }
+            
             imageView?.scaleType = ImageView.ScaleType.FIT_XY
             
             // 设置透明度
@@ -105,8 +142,10 @@ class OverlayService : Service() {
             }
             
             windowManager?.addView(imageView, params)
+            true
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "showOverlay异常", e)
+            false
         }
     }
 
@@ -134,6 +173,35 @@ class OverlayService : Service() {
         android.util.Log.d("OverlayService", "服务销毁，清理资源")
         removeOverlay()
         currentImageUri = null
+        currentOpacity = 100
+        
+        // 简化：只清理快速使用状态，避免过度复杂化
+        try {
+            val quickUsePrefs = getSharedPreferences("quick_use_prefs", 0)
+            if (quickUsePrefs.getBoolean("is_overlay_active", false)) {
+                android.util.Log.d("OverlayService", "服务销毁时清理快速使用状态")
+                quickUsePrefs.edit().putBoolean("is_overlay_active", false).apply()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayService", "清理快速使用状态失败", e)
+        }
+    }
+    
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        super.onTaskRemoved(rootIntent)
+        android.util.Log.d("OverlayService", "任务被移除，清理资源")
+        
+        // 简化：只清理快速使用状态
+        try {
+            val quickUsePrefs = getSharedPreferences("quick_use_prefs", 0)
+            if (quickUsePrefs.getBoolean("is_overlay_active", false)) {
+                android.util.Log.d("OverlayService", "任务移除时清理快速使用状态")
+                quickUsePrefs.edit().putBoolean("is_overlay_active", false).apply()
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayService", "清理快速使用状态失败", e)
+        }
+        stopSelf()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
