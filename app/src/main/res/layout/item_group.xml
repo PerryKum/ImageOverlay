@@ -8,11 +8,11 @@
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textSize="18sp"
-        android:textColor="#222"/>
+        android:textColor="@color/io_text_primary"/>
     <TextView
         android:id="@+id/tvRemark"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:textSize="14sp"
-        android:textColor="#888"/>
+        android:textColor="@color/io_text_secondary"/>
 </LinearLayout> 

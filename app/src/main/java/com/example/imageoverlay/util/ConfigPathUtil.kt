@@ -59,7 +59,7 @@ object ConfigPathUtil {
             try {
                 val nomediaFile = overlayDir.findFile(".nomedia")
                 if (nomediaFile == null) {
-                    overlayDir.createFile("text/plain", ".nomedia")
+                    overlayDir.createFile("", ".nomedia")
                     android.util.Log.d("ConfigPathUtil", "已在SAF目录创建.nomedia文件")
                 }
             } catch (e: Exception) {
@@ -89,7 +89,7 @@ object ConfigPathUtil {
                     try {
                         val nomediaFile = newOverlayDoc.findFile(".nomedia")
                         if (nomediaFile == null) {
-                            newOverlayDoc.createFile("text/plain", ".nomedia")
+                            newOverlayDoc.createFile("", ".nomedia")
                             android.util.Log.d("ConfigPathUtil", "迁移时已在新目录创建.nomedia文件")
                         }
                     } catch (e: Exception) {
@@ -121,7 +121,7 @@ object ConfigPathUtil {
                                 try {
                                     val nomediaFile = newGroupDoc.findFile(".nomedia")
                                     if (nomediaFile == null) {
-                                        newGroupDoc.createFile("text/plain", ".nomedia")
+                                        newGroupDoc.createFile("", ".nomedia")
                                         android.util.Log.d("ConfigPathUtil", "已在组目录 $groupName 创建.nomedia文件")
                                     }
                                 } catch (e: Exception) {
@@ -243,7 +243,7 @@ object ConfigPathUtil {
                 // 在主目录创建.nomedia
                 val nomediaFile = overlayDir.findFile(".nomedia")
                 if (nomediaFile == null) {
-                    overlayDir.createFile("text/plain", ".nomedia")
+                    overlayDir.createFile("", ".nomedia")
                     android.util.Log.d("ConfigPathUtil", "已为主目录创建.nomedia文件")
                 }
                 
@@ -252,7 +252,7 @@ object ConfigPathUtil {
                     if (groupDoc.isDirectory) {
                         val groupNomedia = groupDoc.findFile(".nomedia")
                         if (groupNomedia == null) {
-                            groupDoc.createFile("text/plain", ".nomedia")
+                            groupDoc.createFile("", ".nomedia")
                             android.util.Log.d("ConfigPathUtil", "已为组目录 ${groupDoc.name} 创建.nomedia文件")
                         }
                     }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 文本颜色（暗色） -->
+    <color name="io_text_primary">#FFFFFF</color>
+    <color name="io_text_secondary">#B3FFFFFF</color>
+    <color name="io_text_muted">#99FFFFFF</color>
+
+    <!-- 背景与容器颜色（暗色） -->
+    <color name="io_bg">#121212</color>
+    <color name="io_bg_alt">#1E1E1E</color>
+    <color name="io_divider">#333333</color>
+    <color name="io_thumb_bg">#2A2A2A</color>
+</resources>
+

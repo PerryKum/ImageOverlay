@@ -6,7 +6,7 @@
     <RelativeLayout
         android:layout_width="match_parent"
         android:layout_height="64dp"
-        android:background="#FAFAFA">
+        android:background="@color/io_bg_alt">
         <TextView
             android:id="@+id/tvTitle"
             android:layout_width="wrap_content"
@@ -46,7 +46,8 @@
         android:orientation="horizontal"
         android:padding="16dp"
         android:gravity="center_vertical"
-        android:background="#FFFFFF">
+        android:background="@color/io_bg"
+        android:visibility="gone">
         <ImageView
             android:id="@+id/ivDefaultStatus"
             android:layout_width="24dp"
@@ -59,13 +60,13 @@
             android:layout_height="56dp"
             android:layout_marginEnd="16dp"
             android:scaleType="centerCrop"
-            android:background="#EEE"/>
+            android:background="@color/io_thumb_bg"/>
         <TextView
             android:id="@+id/tvDefaultName"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:textSize="18sp"
-            android:textColor="#222"
+            android:textColor="@color/io_text_primary"
             android:text="默认配置（长按任意配置可设置）"/>
     </LinearLayout>
 

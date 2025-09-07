@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 文本颜色 -->
+    <color name="io_text_primary">#222222</color>
+    <color name="io_text_secondary">#888888</color>
+    <color name="io_text_muted">#666666</color>
+
+    <!-- 背景与容器颜色 -->
+    <color name="io_bg">#FFFFFFFF</color>
+    <color name="io_bg_alt">#FAFAFA</color>
+    <color name="io_divider">#EEEEEE</color>
+    <color name="io_thumb_bg">#EEEEEE</color>
+
+    <!-- 列表选择背景保持系统波纹 -->
+</resources>
+
