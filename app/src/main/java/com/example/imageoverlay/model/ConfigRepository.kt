@@ -21,6 +21,7 @@ object ConfigRepository {
     private const val PREF_APP_BINDINGS = "app_bindings"
     private const val PREF_SETTINGS = "settings"
     private const val KEY_AUTO_START_OVERLAY = "auto_start_overlay"
+    private const val KEY_COVER_CUTOUT = "cover_cutout"
     private var isServiceStarting = false // 防止服务重复启动
 
     fun load(context: Context) {
@@ -357,6 +358,17 @@ object ConfigRepository {
     fun isAutoStartOverlayEnabled(context: Context): Boolean {
         val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
         return sp.getBoolean(KEY_AUTO_START_OVERLAY, false)
+    }
+
+    // 覆盖刘海/挖孔区域 设置
+    fun setCoverCutoutEnabled(context: Context, enabled: Boolean) {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        sp.edit().putBoolean(KEY_COVER_CUTOUT, enabled).apply()
+    }
+
+    fun isCoverCutoutEnabled(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        return sp.getBoolean(KEY_COVER_CUTOUT, true)
     }
 
     fun addGroup(context: Context, group: Group) {

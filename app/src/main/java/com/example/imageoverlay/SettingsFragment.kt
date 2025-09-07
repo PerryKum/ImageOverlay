@@ -42,6 +42,11 @@ class SettingsFragment : Fragment() {
         lastConfigRoot = configRoot
         
         // 创建设置项列表
+        val versionName = try {
+            val pInfo = requireContext().packageManager.getPackageInfo(requireContext().packageName, 0)
+            pInfo.versionName ?: ""
+        } catch (_: Exception) { "" }
+
         settingsList = mutableListOf(
             SettingItem.TextItem("配置保存路径", configRoot) { pickDirectory() },
             SettingItem.SwitchItem(
@@ -51,6 +56,14 @@ class SettingsFragment : Fragment() {
             ) { isChecked ->
                 com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
                 Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
+            },
+            SettingItem.SwitchItem(
+                "覆盖刘海/挖孔区域",
+                "是否将遮罩延伸覆盖到刘海/挖孔区域（Android 9+）",
+                com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(requireContext())
+            ) { isChecked ->
+                com.example.imageoverlay.model.ConfigRepository.setCoverCutoutEnabled(requireContext(), isChecked)
+                Toast.makeText(requireContext(), if (isChecked) "将覆盖刘海/挖孔区域" else "不覆盖刘海/挖孔区域", Toast.LENGTH_SHORT).show()
             },
             SettingItem.SliderItem(
                 "全局遮罩透明度",
@@ -75,7 +88,20 @@ class SettingsFragment : Fragment() {
                     android.util.Log.e("SettingsFragment", "更新透明度失败", e)
                 }
             },
-            SettingItem.TextItem("清除缓存", "") { showClearCacheDialog() }
+            SettingItem.TextItem("清除缓存", "") { showClearCacheDialog() },
+            // 版权信息（置于底部）
+            SettingItem.TextItem(
+                "关于与版权",
+                "v${versionName} · 作者 Perry Kum · GPL-3.0"
+            ) {
+                try {
+                    val uri = Uri.parse("https://perrykum.github.io/ImageOverlay/index.html")
+                    val intent = Intent(Intent.ACTION_VIEW, uri)
+                    startActivity(intent)
+                } catch (_: Exception) {
+                    Toast.makeText(requireContext(), "无法打开官网", Toast.LENGTH_SHORT).show()
+                }
+            }
         )
         
         adapter = SettingsAdapter(settingsList)
@@ -240,6 +266,20 @@ class SettingsFragment : Fragment() {
                 Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
             }
             adapter.notifyItemChanged(1)
+        }
+
+        // 同步 覆盖刘海/挖孔区域 开关
+        val coverCutout = com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(requireContext())
+        if (settingsList.size > 2 && settingsList[2] is SettingItem.SwitchItem) {
+            settingsList[2] = SettingItem.SwitchItem(
+                "覆盖刘海/挖孔区域",
+                "是否将遮罩延伸覆盖到刘海/挖孔区域（Android 9+）",
+                coverCutout
+            ) { isChecked ->
+                com.example.imageoverlay.model.ConfigRepository.setCoverCutoutEnabled(requireContext(), isChecked)
+                Toast.makeText(requireContext(), if (isChecked) "将覆盖刘海/挖孔区域" else "不覆盖刘海/挖孔区域", Toast.LENGTH_SHORT).show()
+            }
+            adapter.notifyItemChanged(2)
         }
     }
 }

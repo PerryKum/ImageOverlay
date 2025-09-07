@@ -136,6 +136,15 @@ class OverlayService : Service() {
                 PixelFormat.TRANSLUCENT
             )
             
+            // 允许内容延伸至刘海/挖孔区域（Android 9+），按设置开关
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val coverCutout = com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(this)
+                params.layoutInDisplayCutoutMode = if (coverCutout)
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                else
+                    WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
+            }
+
             // 为安卓15+添加额外的兼容性设置
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 params.flags = params.flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_OVERSCAN
