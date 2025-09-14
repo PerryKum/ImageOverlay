@@ -97,6 +97,7 @@ class SettingsFragment : Fragment() {
                 }
             },
             SettingItem.TextItem("清除缓存", "") { showClearCacheDialog() },
+            SettingItem.TextItem("测试崩溃", "点击此按钮测试崩溃信息功能") { testCrash() },
             // 版权信息（置于底部）
             SettingItem.TextItem(
                 "关于与版权",
@@ -385,6 +386,18 @@ class SettingsFragment : Fragment() {
                 adapter.notifyItemChanged(idx)
             }
         }
+    }
+
+    private fun testCrash() {
+        AlertDialog.Builder(requireContext())
+            .setTitle("测试崩溃")
+            .setMessage("点击确定将立即崩溃应用，用于测试崩溃信息功能。\n\n崩溃后重新启动应用将显示错误信息。")
+            .setPositiveButton("确定崩溃") { d, _ ->
+                // 立即抛出异常导致崩溃
+                throw RuntimeException("测试崩溃 - 用户主动触发的崩溃测试")
+            }
+            .setNegativeButton("取消", null)
+            .show()
     }
 }
 
