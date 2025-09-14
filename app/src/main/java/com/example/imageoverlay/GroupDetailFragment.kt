@@ -292,11 +292,13 @@ class GroupDetailFragment : Fragment() {
             }
             
             if (!config.active) {
-                // 全局只允许一个绿点
-                ConfigRepository.getGroups().forEach { group ->
-                    group.configs.forEach { it.active = false }
+                // 1. 先切换默认遮罩配置（独立逻辑）
+                val currentGroup = getCurrentGroup()
+                if (currentGroup != null) {
+                    ConfigRepository.switchDefaultConfig(requireContext(), currentGroup.groupName, config)
+                    android.util.Log.d("GroupDetailFragment", "手动切换时同步状态: ${currentGroup.groupName}/${config.configName}")
                 }
-                config.active = true
+                
                 // 先关闭所有遮罩
                 val stopIntent = Intent(requireContext(), OverlayService::class.java)
                 requireContext().stopService(stopIntent)

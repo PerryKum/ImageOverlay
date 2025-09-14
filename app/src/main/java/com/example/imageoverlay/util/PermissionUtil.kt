@@ -36,5 +36,19 @@ object PermissionUtil {
         context.startActivity(intent)
     }
     
+    /**
+     * 打开通知权限设置（安卓13+）
+     */
+    fun openNotificationSettings(context: Context) {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                intent.putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(intent)
+            }
+        } catch (_: Exception) {}
+    }
+    
 
 }

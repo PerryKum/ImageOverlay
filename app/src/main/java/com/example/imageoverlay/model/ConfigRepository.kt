@@ -22,7 +22,10 @@ object ConfigRepository {
     private const val PREF_SETTINGS = "settings"
     private const val KEY_AUTO_START_OVERLAY = "auto_start_overlay"
     private const val KEY_COVER_CUTOUT = "cover_cutout"
+    private const val KEY_BOUND_HARDWARE_KEYS = "bound_hardware_keys" // 逗号分隔的keyCode列表
     private var isServiceStarting = false // 防止服务重复启动
+    private var lastOperationTime = 0L // 记录最后一次操作的时间
+    private val OPERATION_COOLDOWN = 2000L // 操作冷却时间2秒
 
     fun load(context: Context) {
         try {
@@ -274,79 +277,255 @@ object ConfigRepository {
     }
 
     // 新增：处理应用启动事件
-    fun handleAppLaunch(context: Context, packageName: String) {
+    fun handleAppLaunch(context: Context, packageName: String, isLauncher: Boolean = false) {
         try {
+            val currentTime = System.currentTimeMillis()
+            
+            // 检查操作冷却时间，防止频繁操作
+            if (currentTime - lastOperationTime < OPERATION_COOLDOWN) {
+                android.util.Log.d("ConfigRepository", "操作冷却中，跳过处理: $packageName")
+                return
+            }
+            
+            if (isLauncher) {
+                // 检测到桌面/启动器
+                android.util.Log.d("ConfigRepository", "检测到桌面/启动器")
+                lastOperationTime = currentTime
+                
+                // 根据自动开启开关决定是否关闭遮罩
+                if (isAutoStartOverlayEnabled(context)) {
+                    // 自动开启开关开启，关闭遮罩
+                    turnOffOverlaySafely(context)
+                } else {
+                    // 自动开启开关关闭，只设置状态不关闭遮罩
+                    setDefaultActive(context, false)
+                    android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置状态不关闭遮罩")
+                }
+                return
+            }
+            
             val group = getGroupByPackageName(packageName)
             if (group != null) {
                 val defaultConfig = getGroupDefaultConfig(group.groupName)
                 if (defaultConfig != null) {
-                    // 检查是否自动开启遮罩
-                    if (isAutoStartOverlayEnabled(context)) {
-                        // 检查当前是否已经有相同的遮罩在运行
-                        val currentDefaultConfig = getDefaultConfig(context)
-                        val isSameConfig = currentDefaultConfig?.imageUri == defaultConfig.imageUri && isDefaultActive(context)
-                        
-                        if (!isSameConfig && !isServiceStarting) {
-                            isServiceStarting = true
-                            
-                            // 第一步：先关闭当前遮罩服务
-                            try {
-                                val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
-                                context.stopService(stopIntent)
-                                setDefaultActive(context, false)
-                                android.util.Log.d("ConfigRepository", "已停止当前遮罩服务")
-                                
-                                // 等待服务完全停止
-                                Thread.sleep(50)
-                            } catch (e: Exception) {
-                                android.util.Log.e("ConfigRepository", "停止遮罩服务失败", e)
-                            }
-                            
-                            // 第二步：延迟设置新的默认配置
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                try {
-                                    // 设置为全局默认遮罩
-                                    setDefaultConfig(context, group.groupName, defaultConfig)
-                                    android.util.Log.d("ConfigRepository", "已设置新的默认配置")
-                                    
-                                    // 第三步：延迟启动新的遮罩服务
-                                    android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                        try {
-                                            // 激活遮罩
-                                            setDefaultActive(context, true)
-                                            
-                                            // 启动遮罩服务
-                                            val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
-                                            intent.putExtra("imageUri", defaultConfig.imageUri)
-                                            intent.putExtra("opacity", getDefaultOpacity(context))
-                                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                                                context.startForegroundService(intent)
-                                            } else {
-                                                context.startService(intent)
-                                            }
-                                            android.util.Log.d("ConfigRepository", "已启动新的遮罩服务")
-                                        } catch (e: Exception) {
-                                            android.util.Log.e("ConfigRepository", "启动遮罩服务失败", e)
-                                        } finally {
-                                            isServiceStarting = false
-                                        }
-                                    }, 100) // 100毫秒延迟启动新服务
-                                } catch (e: Exception) {
-                                    android.util.Log.e("ConfigRepository", "设置默认配置失败", e)
-                                    isServiceStarting = false
-                                }
-                            }, 50) // 50毫秒延迟设置配置
-                        }
-                    } else {
-                        // 仅设置全局默认遮罩，不启动服务
-                        setDefaultConfig(context, group.groupName, defaultConfig)
-                    }
+                    // 始终切换为组默认遮罩（不管自动开启开关是否开启）
+                    android.util.Log.d("ConfigRepository", "切换到组默认遮罩: ${group.groupName}")
+                    lastOperationTime = currentTime
+                    switchToGroupDefault(context, group.groupName, defaultConfig)
+                }
+            } else {
+                // 没有绑定组的应用
+                android.util.Log.d("ConfigRepository", "应用 $packageName 未绑定组")
+                lastOperationTime = currentTime
+                
+                // 根据自动开启开关决定是否关闭遮罩
+                if (isAutoStartOverlayEnabled(context)) {
+                    // 自动开启开关开启，关闭遮罩
+                    turnOffOverlaySafely(context)
+                } else {
+                    // 自动开启开关关闭，只设置状态不关闭遮罩
+                    setDefaultActive(context, false)
+                    android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置状态不关闭遮罩")
                 }
             }
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "处理应用启动事件失败: $packageName", e)
         }
     }
+    
+    /**
+     * 安全地关闭遮罩，确保完全关闭后再进行其他操作
+     */
+    private fun turnOffOverlaySafely(context: Context) {
+        if (isServiceStarting) {
+            android.util.Log.d("ConfigRepository", "服务正在启动中，跳过关闭操作")
+            return
+        }
+        
+        // 检查当前是否真的有遮罩在运行
+        if (!isDefaultActive(context)) {
+            android.util.Log.d("ConfigRepository", "当前没有遮罩运行，跳过关闭操作")
+            return
+        }
+        
+        try {
+            isServiceStarting = true
+            android.util.Log.d("ConfigRepository", "开始安全关闭遮罩")
+            
+            // 停止遮罩服务
+            val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+            context.stopService(stopIntent)
+            setDefaultActive(context, false)
+            
+            // 等待服务完全停止
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                try {
+                    android.util.Log.d("ConfigRepository", "遮罩已安全关闭")
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "关闭遮罩后处理失败", e)
+                } finally {
+                    isServiceStarting = false
+                }
+            }, 300) // 增加到300毫秒延迟确保服务完全停止
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "安全关闭遮罩失败", e)
+            isServiceStarting = false
+        }
+    }
+    
+     /**
+      * 切换到组默认遮罩，根据自动开启开关决定是否显示
+      */
+     private fun switchToGroupDefault(context: Context, groupName: String, defaultConfig: com.example.imageoverlay.model.Config) {
+         try {
+             // 检查当前是否已经有相同的遮罩在运行
+             val currentDefaultConfig = getDefaultConfig(context)
+             val isSameConfig = currentDefaultConfig?.imageUri == defaultConfig.imageUri && isDefaultActive(context)
+             
+             if (isSameConfig) {
+                 android.util.Log.d("ConfigRepository", "相同配置已运行，跳过切换: ${groupName}/${defaultConfig.configName}")
+                 return
+             }
+             
+             // 1. 先切换默认遮罩配置（独立逻辑）
+             switchDefaultConfig(context, groupName, defaultConfig)
+             
+             // 2. 根据自动开启开关决定是否显示遮罩
+             if (isAutoStartOverlayEnabled(context)) {
+                 // 自动开启开关开启，启动遮罩
+                 if (!isServiceStarting) {
+                     turnOnOverlaySafely(context)
+                 }
+             } else {
+                 // 自动开启开关关闭，只设置配置不启动遮罩
+                 setDefaultActive(context, false)
+                 android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置配置不启动遮罩")
+             }
+         } catch (e: Exception) {
+             android.util.Log.e("ConfigRepository", "切换到组默认遮罩失败", e)
+         }
+     }
+     
+     /**
+      * 切换默认遮罩配置（独立逻辑）
+      */
+     fun switchDefaultConfig(context: Context, groupName: String, defaultConfig: com.example.imageoverlay.model.Config) {
+         try {
+             // 1. 清除所有组的激活状态
+             groupList.forEach { group ->
+                 group.configs.forEach { config -> config.active = false }
+             }
+             
+             // 2. 激活当前组的默认配置
+             val currentGroup = groupList.find { it.groupName == groupName }
+             currentGroup?.let { group ->
+                 val targetConfig = group.configs.find { it.configName == defaultConfig.configName }
+                 targetConfig?.active = true
+                 android.util.Log.d("ConfigRepository", "激活组配置: ${groupName}/${defaultConfig.configName}")
+             }
+             
+             // 3. 设置为全局默认遮罩
+             setDefaultConfig(context, groupName, defaultConfig)
+             android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupName}/${defaultConfig.configName}")
+             
+             // 4. 保存配置
+             save(context)
+         } catch (e: Exception) {
+             android.util.Log.e("ConfigRepository", "切换默认遮罩配置失败", e)
+         }
+     }
+     
+     /**
+      * 同步更新组配置状态，确保手动切换和自动切换状态一致
+      */
+     fun syncGroupConfigStates(context: Context, groupName: String, defaultConfig: com.example.imageoverlay.model.Config) {
+         try {
+             // 1. 清除所有组的激活状态
+             groupList.forEach { group ->
+                 group.configs.forEach { config -> config.active = false }
+             }
+             
+             // 2. 激活当前组的默认配置
+             val currentGroup = groupList.find { it.groupName == groupName }
+             currentGroup?.let { group ->
+                 val targetConfig = group.configs.find { it.configName == defaultConfig.configName }
+                 targetConfig?.active = true
+                 android.util.Log.d("ConfigRepository", "激活组配置: ${groupName}/${defaultConfig.configName}")
+             }
+             
+             // 3. 设置为全局默认遮罩
+             setDefaultConfig(context, groupName, defaultConfig)
+             android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupName}/${defaultConfig.configName}")
+             
+             // 4. 保存配置
+             save(context)
+         } catch (e: Exception) {
+             android.util.Log.e("ConfigRepository", "同步组配置状态失败", e)
+         }
+     }
+     
+    
+     /**
+      * 安全地开启遮罩，确保之前的遮罩完全关闭后再开启新的
+      */
+     private fun turnOnOverlaySafely(context: Context) {
+         if (isServiceStarting) {
+             android.util.Log.d("ConfigRepository", "服务正在启动中，跳过开启操作")
+             return
+         }
+         
+         // 获取当前默认配置
+         val defaultConfig = getDefaultConfig(context)
+         if (defaultConfig == null || defaultConfig.imageUri.isBlank()) {
+             android.util.Log.w("ConfigRepository", "默认配置为空，跳过开启操作")
+             return
+         }
+         
+         try {
+             isServiceStarting = true
+             android.util.Log.d("ConfigRepository", "开始安全开启遮罩: ${defaultConfig.configName}")
+             
+             // 第一步：先关闭当前遮罩服务
+             try {
+                 val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+                 context.stopService(stopIntent)
+                 android.util.Log.d("ConfigRepository", "已停止当前遮罩服务")
+             } catch (e: Exception) {
+                 android.util.Log.e("ConfigRepository", "停止遮罩服务失败", e)
+             }
+             
+             // 第二步：延迟启动新的遮罩服务
+             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                 try {
+                     // 再次检查服务状态，防止重复启动
+                     if (isServiceStarting) {
+                         // 激活遮罩
+                         setDefaultActive(context, true)
+                         
+                         // 启动遮罩服务
+                         val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
+                         intent.putExtra("imageUri", defaultConfig.imageUri)
+                         intent.putExtra("opacity", getDefaultOpacity(context))
+                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                             context.startForegroundService(intent)
+                         } else {
+                             context.startService(intent)
+                         }
+                         android.util.Log.d("ConfigRepository", "已启动新的遮罩服务")
+                     } else {
+                         android.util.Log.d("ConfigRepository", "服务状态已改变，取消启动")
+                     }
+                 } catch (e: Exception) {
+                     android.util.Log.e("ConfigRepository", "启动遮罩服务失败", e)
+                 } finally {
+                     isServiceStarting = false
+                 }
+             }, 200) // 200毫秒延迟启动新服务，确保之前的服务完全停止
+         } catch (e: Exception) {
+             android.util.Log.e("ConfigRepository", "安全开启遮罩失败", e)
+             isServiceStarting = false
+         }
+     }
 
     // 新增：设置自动开启遮罩
     fun setAutoStartOverlayEnabled(context: Context, enabled: Boolean) {
@@ -359,6 +538,7 @@ object ConfigRepository {
         val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
         return sp.getBoolean(KEY_AUTO_START_OVERLAY, false)
     }
+    
 
     // 覆盖刘海/挖孔区域 设置
     fun setCoverCutoutEnabled(context: Context, enabled: Boolean) {
@@ -369,6 +549,35 @@ object ConfigRepository {
     fun isCoverCutoutEnabled(context: Context): Boolean {
         val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
         return sp.getBoolean(KEY_COVER_CUTOUT, true)
+    }
+
+    // ============ 实体按键绑定 ============
+    /**
+     * 保存绑定的实体按键，最多3个。使用逗号分隔的字符串持久化。
+     */
+    fun setBoundHardwareKeys(context: Context, keyCodes: List<Int>) {
+        val sanitized = keyCodes.distinct().take(3)
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        sp.edit().putString(KEY_BOUND_HARDWARE_KEYS, sanitized.joinToString(",")).apply()
+    }
+
+    /**
+     * 读取绑定的实体按键列表。
+     */
+    fun getBoundHardwareKeys(context: Context): List<Int> {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        val raw = sp.getString(KEY_BOUND_HARDWARE_KEYS, "") ?: ""
+        if (raw.isBlank()) return emptyList()
+        return raw.split(',').mapNotNull {
+            try { it.trim().toInt() } catch (_: Exception) { null }
+        }.distinct().take(3)
+    }
+
+    /**
+     * 判断某个按键是否被绑定。
+     */
+    fun isHardwareKeyBound(context: Context, keyCode: Int): Boolean {
+        return getBoundHardwareKeys(context).contains(keyCode)
     }
 
     fun addGroup(context: Context, group: Group) {

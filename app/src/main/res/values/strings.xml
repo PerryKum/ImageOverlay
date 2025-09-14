@@ -13,4 +13,5 @@
     <string name="adjust_opacity">调整透明度</string>
     <string name="cancel">取消</string>
     <string name="apply">应用</string>
+    <string name="accessibility_keybinding_desc">监听实体按键以切换遮罩开关。需要开启无障碍服务权限。</string>
 </resources> 

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:packageNames=""
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:notificationTimeout="100"
+    android:canRetrieveWindowContent="false"
+    android:canPerformGestures="false"
+    android:canRequestFilterKeyEvents="true"
+    android:accessibilityFlags="flagDefault|flagRequestFilterKeyEvents"
+    android:description="@string/accessibility_keybinding_desc"
+    android:settingsActivity=""
+    android:nonInteractiveUiTimeout="0"
+    android:interactiveUiTimeout="0"/>
+
+

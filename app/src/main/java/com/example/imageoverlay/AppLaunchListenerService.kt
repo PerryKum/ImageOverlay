@@ -51,12 +51,14 @@ class AppLaunchListenerService : Service() {
         // 创建前台服务通知，确保服务不被系统杀死
         createNotificationChannel()
         val notification: Notification = NotificationCompat.Builder(this, "listener_channel")
-            .setContentTitle("应用监听服务")
-            .setContentText("正在监听应用切换")
+            .setContentTitle("ImageOverlay")
+            .setContentText("后台监听中")
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(true)
             .setAutoCancel(false)
+            .setShowWhen(false)
+            .setSilent(true)
             .build()
         startForeground(2, notification)
         
@@ -82,11 +84,14 @@ class AppLaunchListenerService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 "listener_channel",
-                "应用监听服务",
-                NotificationManager.IMPORTANCE_LOW
+                "后台监听",
+                NotificationManager.IMPORTANCE_MIN
             ).apply {
-                description = "用于监听应用切换的服务通知"
+                description = "后台监听应用切换"
                 setShowBadge(false)
+                enableLights(false)
+                enableVibration(false)
+                setSound(null, null)
             }
             val notificationManager = getSystemService(NotificationManager::class.java)
             notificationManager.createNotificationChannel(channel)

@@ -49,9 +49,17 @@ class SettingsFragment : Fragment() {
 
         settingsList = mutableListOf(
             SettingItem.TextItem("配置保存路径", configRoot) { pickDirectory() },
+            SettingItem.TextItem(
+                "运行条件检测",
+                "查看权限与服务状态"
+            ) {
+                // 进入运行条件检测页面
+                startActivity(android.content.Intent(requireContext(), RequirementsActivity::class.java))
+            },
+            SettingItem.TextItem("绑定实体按键", getBoundKeysSummary()) { showKeyBindingDialog() },
             SettingItem.SwitchItem(
-                "自动开启遮罩", 
-                "启动绑定组的软件时自动开启对应遮罩", 
+                "自动开启/关闭遮罩", 
+                "启动绑定组的软件时自动开启对应遮罩，离开时自动关闭", 
                 com.example.imageoverlay.model.ConfigRepository.isAutoStartOverlayEnabled(requireContext())
             ) { isChecked ->
                 com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
@@ -107,6 +115,94 @@ class SettingsFragment : Fragment() {
         adapter = SettingsAdapter(settingsList)
         recyclerView.adapter = adapter
         return view
+    }
+
+    private fun getBoundKeysSummary(): String {
+        val keys = com.example.imageoverlay.model.ConfigRepository.getBoundHardwareKeys(requireContext())
+        if (keys.isEmpty()) return "未绑定"
+        return keys.joinToString(" + ") { keyCodeToName(it) }
+    }
+
+    private fun keyCodeToName(code: Int): String {
+        return when (code) {
+            android.view.KeyEvent.KEYCODE_VOLUME_UP -> "音量+"
+            android.view.KeyEvent.KEYCODE_VOLUME_DOWN -> "音量-"
+            android.view.KeyEvent.KEYCODE_VOLUME_MUTE -> "静音"
+            android.view.KeyEvent.KEYCODE_POWER -> "电源"
+            android.view.KeyEvent.KEYCODE_HOME -> "Home"
+            android.view.KeyEvent.KEYCODE_BACK -> "返回"
+            else -> "Code $code"
+        }
+    }
+
+    private fun showKeyBindingDialog() {
+        val ctx = requireContext()
+        // 若无障碍未启用，先引导
+        val a11yEnabled = com.example.imageoverlay.util.AccessibilityUtil.isServiceEnabled(ctx, "com.example.imageoverlay.keybinding.KeyBindingService")
+        if (!a11yEnabled) {
+            AlertDialog.Builder(ctx)
+                .setTitle("需要无障碍权限")
+                .setMessage("请先在系统设置中启用“按键绑定服务”，否则无法全局监听实体按键。")
+                .setPositiveButton("去启用") { d, _ ->
+                    com.example.imageoverlay.util.AccessibilityUtil.openAccessibilitySettings(ctx)
+                    d.dismiss()
+                }
+                .setNegativeButton("取消", null)
+                .show()
+            return
+        }
+        val container = android.widget.LinearLayout(ctx)
+        container.orientation = android.widget.LinearLayout.VERTICAL
+        container.setPadding(48, 32, 48, 16)
+
+        val tip = android.widget.TextView(ctx)
+        tip.text = "请按下最多3个实体按键作为组合；再次按确定保存。\n提示：不同机型可能限制音量键捕获，需要开启无障碍服务后生效。"
+        tip.textSize = 14f
+        container.addView(tip)
+
+        val currentView = android.widget.TextView(ctx)
+        currentView.text = "当前：" + getBoundKeysSummary()
+        currentView.textSize = 16f
+        currentView.setPadding(0, 24, 0, 0)
+        container.addView(currentView)
+
+        val captureView = android.widget.TextView(ctx)
+        captureView.text = "已录制：无"
+        captureView.textSize = 16f
+        captureView.setPadding(0, 16, 0, 0)
+        container.addView(captureView)
+
+        val recorded = mutableListOf<Int>()
+
+        val dialog = AlertDialog.Builder(ctx)
+            .setTitle("绑定实体按键")
+            .setView(container)
+            .setPositiveButton("确定") { d, _ ->
+                com.example.imageoverlay.model.ConfigRepository.setBoundHardwareKeys(ctx, recorded)
+                // 更新“绑定实体按键”项
+                val idx = settingsList.indexOfFirst { it is SettingItem.TextItem && it.title == "绑定实体按键" }
+                if (idx >= 0) {
+                    settingsList[idx] = SettingItem.TextItem("绑定实体按键", getBoundKeysSummary()) { showKeyBindingDialog() }
+                    adapter.notifyItemChanged(idx)
+                }
+                d.dismiss()
+            }
+            .setNegativeButton("取消", null)
+            .create()
+
+        dialog.setOnKeyListener { _, keyCode, keyEvent ->
+            if (keyEvent.action == android.view.KeyEvent.ACTION_DOWN) {
+                if (!recorded.contains(keyCode) && recorded.size < 3) {
+                    recorded.add(keyCode)
+                    captureView.text = "已录制：" + recorded.joinToString(" + ") { keyCodeToName(it) }
+                }
+                true
+            } else {
+                false
+            }
+        }
+
+        dialog.show()
     }
 
     private fun pickDirectory() {
@@ -254,32 +350,40 @@ class SettingsFragment : Fragment() {
 
     override fun onResume() {
         super.onResume()
-        // 刷新开关状态
-        val autoStartOverlay = com.example.imageoverlay.model.ConfigRepository.isAutoStartOverlayEnabled(requireContext())
-        if (settingsList.size > 1 && settingsList[1] is SettingItem.SwitchItem) {
-            settingsList[1] = SettingItem.SwitchItem(
-                "自动开启遮罩", 
-                "启动绑定组的软件时自动开启对应遮罩", 
-                autoStartOverlay
-            ) { isChecked ->
-                com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
-                Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
+        // 运行条件检测入口无需动态刷新，进入页面查看最新状态
+
+        // 刷新"自动开启遮罩"
+        run {
+            val idx = settingsList.indexOfFirst { it is SettingItem.SwitchItem && it.title == "自动开启遮罩" }
+            if (idx >= 0) {
+                val autoStart = com.example.imageoverlay.model.ConfigRepository.isAutoStartOverlayEnabled(requireContext())
+                settingsList[idx] = SettingItem.SwitchItem(
+                    "自动开启遮罩",
+                    "启动绑定组的软件时自动开启对应遮罩，回到桌面时自动关闭",
+                    autoStart
+                ) { isChecked ->
+                    com.example.imageoverlay.model.ConfigRepository.setAutoStartOverlayEnabled(requireContext(), isChecked)
+                    Toast.makeText(requireContext(), if (isChecked) "已开启自动遮罩" else "已关闭自动遮罩", Toast.LENGTH_SHORT).show()
+                }
+                adapter.notifyItemChanged(idx)
             }
-            adapter.notifyItemChanged(1)
         }
 
-        // 同步 覆盖刘海/挖孔区域 开关
-        val coverCutout = com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(requireContext())
-        if (settingsList.size > 2 && settingsList[2] is SettingItem.SwitchItem) {
-            settingsList[2] = SettingItem.SwitchItem(
-                "覆盖刘海/挖孔区域",
-                "是否将遮罩延伸覆盖到刘海/挖孔区域（Android 9+）",
-                coverCutout
-            ) { isChecked ->
-                com.example.imageoverlay.model.ConfigRepository.setCoverCutoutEnabled(requireContext(), isChecked)
-                Toast.makeText(requireContext(), if (isChecked) "将覆盖刘海/挖孔区域" else "不覆盖刘海/挖孔区域", Toast.LENGTH_SHORT).show()
+        // 刷新“覆盖刘海/挖孔区域”
+        run {
+            val idx = settingsList.indexOfFirst { it is SettingItem.SwitchItem && it.title == "覆盖刘海/挖孔区域" }
+            if (idx >= 0) {
+                val coverCutout = com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(requireContext())
+                settingsList[idx] = SettingItem.SwitchItem(
+                    "覆盖刘海/挖孔区域",
+                    "是否将遮罩延伸覆盖到刘海/挖孔区域（Android 9+）",
+                    coverCutout
+                ) { isChecked ->
+                    com.example.imageoverlay.model.ConfigRepository.setCoverCutoutEnabled(requireContext(), isChecked)
+                    Toast.makeText(requireContext(), if (isChecked) "将覆盖刘海/挖孔区域" else "不覆盖刘海/挖孔区域", Toast.LENGTH_SHORT).show()
+                }
+                adapter.notifyItemChanged(idx)
             }
-            adapter.notifyItemChanged(2)
         }
     }
 }

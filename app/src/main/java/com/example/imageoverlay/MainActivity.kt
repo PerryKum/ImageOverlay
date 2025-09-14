@@ -16,8 +16,28 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         
         try {
+            // 初始化崩溃捕获
+            try { com.example.imageoverlay.util.CrashHandler.init(this) } catch (_: Exception) {}
             com.example.imageoverlay.util.ConfigPathUtil.checkAndFixRoot(this)
             setContentView(R.layout.activity_main)
+            // 若上次有崩溃日志，提示查看
+            try {
+                com.example.imageoverlay.util.CrashHandler.consumeCrashLog(this)?.let { log ->
+                    android.app.AlertDialog.Builder(this)
+                        .setTitle("上次运行发生异常")
+                        .setMessage(log.take(3000))
+                        .setPositiveButton("复制") { d, _ ->
+                            try {
+                                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                                cm.setPrimaryClip(android.content.ClipData.newPlainText("crash", log))
+                                android.widget.Toast.makeText(this, "已复制到剪贴板", android.widget.Toast.LENGTH_SHORT).show()
+                            } catch (_: Exception) {}
+                            d.dismiss()
+                        }
+                        .setNegativeButton("关闭", null)
+                        .show()
+                }
+            } catch (_: Exception) {}
             
             // 检查使用情况访问权限
             if (!com.example.imageoverlay.util.UsagePermissionUtil.hasUsageStatsPermission(this)) {
@@ -140,6 +160,16 @@ class MainActivity : AppCompatActivity() {
                 showForcePickDirectoryDialog()
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        try { com.example.imageoverlay.util.AppStateUtil.setInAppActive(this, true) } catch (_: Exception) {}
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try { com.example.imageoverlay.util.AppStateUtil.setInAppActive(this, false) } catch (_: Exception) {}
     }
     
     private fun setupNavigation() {
