@@ -73,6 +73,14 @@ class SettingsFragment : Fragment() {
                 com.example.imageoverlay.model.ConfigRepository.setCoverCutoutEnabled(requireContext(), isChecked)
                 Toast.makeText(requireContext(), if (isChecked) "将覆盖刘海/挖孔区域" else "不覆盖刘海/挖孔区域", Toast.LENGTH_SHORT).show()
             },
+            SettingItem.SwitchItem(
+                "悬浮球功能",
+                "在绑定应用中使用悬浮球快速切换遮罩",
+                com.example.imageoverlay.model.ConfigRepository.isFloatingBallEnabled(requireContext())
+            ) { isChecked ->
+                com.example.imageoverlay.model.ConfigRepository.setFloatingBallEnabled(requireContext(), isChecked)
+                Toast.makeText(requireContext(), if (isChecked) "已开启悬浮球功能" else "已关闭悬浮球功能", Toast.LENGTH_SHORT).show()
+            },
             SettingItem.SliderItem(
                 "全局遮罩透明度",
                 "设置所有遮罩的透明度值",

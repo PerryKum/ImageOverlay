@@ -42,6 +42,11 @@
             android:name=".AppLaunchListenerService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+            
+        <service
+            android:name=".FloatingBallService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <service
             android:name=".tiles.DefaultToggleTileService"

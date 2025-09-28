@@ -307,6 +307,9 @@ class GroupDetailFragment : Fragment() {
                 }
             }
             
+            // 标记手动操作
+            ConfigRepository.markManualOperation()
+            
             if (!config.active) {
                 // 1. 先切换默认遮罩配置（独立逻辑）
                 val currentGroup = getCurrentGroup()

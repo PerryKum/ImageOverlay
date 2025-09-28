@@ -22,10 +22,14 @@ object ConfigRepository {
     private const val PREF_SETTINGS = "settings"
     private const val KEY_AUTO_START_OVERLAY = "auto_start_overlay"
     private const val KEY_COVER_CUTOUT = "cover_cutout"
+    private const val KEY_FLOATING_BALL = "floating_ball"
     private const val KEY_BOUND_HARDWARE_KEYS = "bound_hardware_keys" // 逗号分隔的keyCode列表
     private var isServiceStarting = false // 防止服务重复启动
+    private var isServiceStopping = false // 防止服务重复停止
     private var lastOperationTime = 0L // 记录最后一次操作的时间
-    private val OPERATION_COOLDOWN = 2000L // 操作冷却时间2秒
+    private val OPERATION_COOLDOWN = 3000L // 操作冷却时间3秒
+    private var lastManualOperationTime = 0L // 记录最后一次手动操作的时间
+    private val MANUAL_OPERATION_COOLDOWN = 5000L // 手动操作冷却时间5秒
 
     fun load(context: Context) {
         try {
@@ -287,10 +291,25 @@ object ConfigRepository {
                 return
             }
             
+            // 检查是否有最近的手动操作，如果有则跳过自动处理
+            if (currentTime - lastManualOperationTime < MANUAL_OPERATION_COOLDOWN) {
+                android.util.Log.d("ConfigRepository", "检测到最近手动操作，跳过自动处理: $packageName")
+                return
+            }
+            
             if (isLauncher) {
                 // 检测到桌面/启动器
                 android.util.Log.d("ConfigRepository", "检测到桌面/启动器")
                 lastOperationTime = currentTime
+                
+                // 停止悬浮球服务
+                try {
+                    val floatingBallIntent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
+                    context.stopService(floatingBallIntent)
+                    android.util.Log.d("ConfigRepository", "桌面检测：停止悬浮球服务")
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "停止悬浮球服务失败", e)
+                }
                 
                 // 根据自动开启开关决定是否关闭遮罩
                 if (isAutoStartOverlayEnabled(context)) {
@@ -313,8 +332,34 @@ object ConfigRepository {
                     lastOperationTime = currentTime
                     switchToGroupDefault(context, group.groupName, defaultConfig)
                 }
+                
+                // 启动悬浮球服务（如果启用）
+                if (isFloatingBallEnabled(context)) {
+                    try {
+                        val floatingBallIntent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
+                        floatingBallIntent.putExtra("packageName", packageName)
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                            context.startForegroundService(floatingBallIntent)
+                        } else {
+                            context.startService(floatingBallIntent)
+                        }
+                        android.util.Log.d("ConfigRepository", "启动悬浮球服务: $packageName")
+                    } catch (e: Exception) {
+                        android.util.Log.e("ConfigRepository", "启动悬浮球服务失败", e)
+                    }
+                } else {
+                    android.util.Log.d("ConfigRepository", "悬浮球功能已禁用，跳过启动")
+                }
             } else {
-                // 没有绑定组的应用
+                // 没有绑定组的应用，停止悬浮球服务
+                try {
+                    val floatingBallIntent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
+                    context.stopService(floatingBallIntent)
+                    android.util.Log.d("ConfigRepository", "停止悬浮球服务: $packageName")
+                } catch (e: Exception) {
+                    android.util.Log.e("ConfigRepository", "停止悬浮球服务失败", e)
+                }
+                
                 android.util.Log.d("ConfigRepository", "应用 $packageName 未绑定组")
                 lastOperationTime = currentTime
                 
@@ -337,8 +382,8 @@ object ConfigRepository {
      * 安全地关闭遮罩，确保完全关闭后再进行其他操作
      */
     private fun turnOffOverlaySafely(context: Context) {
-        if (isServiceStarting) {
-            android.util.Log.d("ConfigRepository", "服务正在启动中，跳过关闭操作")
+        if (isServiceStarting || isServiceStopping) {
+            android.util.Log.d("ConfigRepository", "服务正在启动或停止中，跳过关闭操作")
             return
         }
         
@@ -349,7 +394,7 @@ object ConfigRepository {
         }
         
         try {
-            isServiceStarting = true
+            isServiceStopping = true
             android.util.Log.d("ConfigRepository", "开始安全关闭遮罩")
             
             // 停止遮罩服务
@@ -364,12 +409,12 @@ object ConfigRepository {
                 } catch (e: Exception) {
                     android.util.Log.e("ConfigRepository", "关闭遮罩后处理失败", e)
                 } finally {
-                    isServiceStarting = false
+                    isServiceStopping = false
                 }
-            }, 300) // 增加到300毫秒延迟确保服务完全停止
+            }, 500) // 增加到500毫秒延迟确保服务完全停止
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "安全关闭遮罩失败", e)
-            isServiceStarting = false
+            isServiceStopping = false
         }
     }
     
@@ -469,8 +514,8 @@ object ConfigRepository {
       * 安全地开启遮罩，确保之前的遮罩完全关闭后再开启新的
       */
      private fun turnOnOverlaySafely(context: Context) {
-         if (isServiceStarting) {
-             android.util.Log.d("ConfigRepository", "服务正在启动中，跳过开启操作")
+         if (isServiceStarting || isServiceStopping) {
+             android.util.Log.d("ConfigRepository", "服务正在启动或停止中，跳过开启操作")
              return
          }
          
@@ -498,7 +543,7 @@ object ConfigRepository {
              android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
                  try {
                      // 再次检查服务状态，防止重复启动
-                     if (isServiceStarting) {
+                     if (isServiceStarting && !isServiceStopping) {
                          // 激活遮罩
                          setDefaultActive(context, true)
                          
@@ -520,7 +565,7 @@ object ConfigRepository {
                  } finally {
                      isServiceStarting = false
                  }
-             }, 200) // 200毫秒延迟启动新服务，确保之前的服务完全停止
+             }, 500) // 增加到500毫秒延迟启动新服务，确保之前的服务完全停止
          } catch (e: Exception) {
              android.util.Log.e("ConfigRepository", "安全开启遮罩失败", e)
              isServiceStarting = false
@@ -549,6 +594,23 @@ object ConfigRepository {
     fun isCoverCutoutEnabled(context: Context): Boolean {
         val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
         return sp.getBoolean(KEY_COVER_CUTOUT, true)
+    }
+
+    // 悬浮球功能设置
+    fun setFloatingBallEnabled(context: Context, enabled: Boolean) {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        sp.edit().putBoolean(KEY_FLOATING_BALL, enabled).apply()
+    }
+
+    fun isFloatingBallEnabled(context: Context): Boolean {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        return sp.getBoolean(KEY_FLOATING_BALL, true)
+    }
+    
+    // 标记手动操作时间
+    fun markManualOperation() {
+        lastManualOperationTime = System.currentTimeMillis()
+        android.util.Log.d("ConfigRepository", "标记手动操作时间: $lastManualOperationTime")
     }
 
     // ============ 实体按键绑定 ============

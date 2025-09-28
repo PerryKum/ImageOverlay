@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="wrap_content"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:background="@drawable/floating_ball_background"
+    android:padding="8dp"
+    android:gravity="center_vertical">
+
+    <ImageView
+        android:id="@+id/ballIcon"
+        android:layout_width="24dp"
+        android:layout_height="24dp"
+        android:src="@drawable/ic_floating_ball"
+        android:contentDescription="悬浮球图标" />
+
+    <TextView
+        android:id="@+id/ballText"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="遮罩"
+        android:textSize="12sp"
+        android:textColor="@android:color/white"
+        android:layout_marginStart="4dp"
+        android:visibility="gone" />
+
+</LinearLayout>
