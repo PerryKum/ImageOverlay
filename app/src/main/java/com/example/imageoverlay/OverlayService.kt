@@ -12,6 +12,11 @@ import android.os.IBinder
 import android.view.WindowManager
 import android.widget.ImageView
 import androidx.core.app.NotificationCompat
+import pl.droidsonroids.gif.GifImageView
+import pl.droidsonroids.gif.GifDrawable
+import java.io.InputStream
+import com.bumptech.glide.Glide
+import com.bumptech.glide.load.resource.gif.GifDrawable as GlideGifDrawable
 
 class OverlayService : Service() {
     private var windowManager: WindowManager? = null
@@ -21,6 +26,18 @@ class OverlayService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
+            // 立即创建前台服务通知，避免超时
+            createNotificationChannel()
+            val notification: Notification = NotificationCompat.Builder(this, "overlay_channel")
+                .setContentTitle("遮罩服务")
+                .setContentText("正在启动遮罩...")
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .setOngoing(true)
+                .setAutoCancel(false)
+                .build()
+            startForeground(1, notification)
+            
             // 检查是否是透明度更新请求
             val opacityValue = intent?.getIntExtra("updateOpacity", -1) ?: -1
             if (opacityValue != -1) {
@@ -66,17 +83,20 @@ class OverlayService : Service() {
                 currentOpacity = newOpacity
                 val success = showOverlay(imageUri, newOpacity)
                 if (success) {
-                android.util.Log.d("OverlayService", "遮罩显示成功")
+                    android.util.Log.d("OverlayService", "遮罩显示成功")
                 } else {
-                    android.util.Log.e("OverlayService", "遮罩显示失败")
+                    android.util.Log.e("OverlayService", "遮罩显示失败，停止服务")
                     stopSelf()
                     return START_NOT_STICKY
                 }
+            } else {
+                android.util.Log.e("OverlayService", "imageUri为null，停止服务")
+                stopSelf()
+                return START_NOT_STICKY
             }
             
-            // 确保前台服务通知
-            createNotificationChannel()
-            val notification: Notification = NotificationCompat.Builder(this, "overlay_channel")
+            // 更新前台服务通知内容
+            val successNotification: Notification = NotificationCompat.Builder(this, "overlay_channel")
                 .setContentTitle("遮罩已启动")
                 .setContentText("点击返回应用")
                 .setSmallIcon(R.mipmap.ic_launcher)
@@ -84,9 +104,7 @@ class OverlayService : Service() {
                 .setOngoing(true)
                 .setAutoCancel(false)
                 .build()
-            startForeground(1, notification)
-            
-
+            startForeground(1, successNotification)
             
             android.util.Log.d("OverlayService", "前台服务已启动")
         } catch (e: Exception) {
@@ -101,19 +119,57 @@ class OverlayService : Service() {
     private fun showOverlay(imageUri: Uri, opacity: Int): Boolean {
         return try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-            imageView = ImageView(this)
             
-            // 验证图片URI是否有效
-            try {
-            imageView?.setImageURI(imageUri)
-                // 检查图片是否成功加载
-                if (imageView?.drawable == null) {
-                    android.util.Log.e("OverlayService", "图片加载失败: $imageUri")
+            // 检查文件类型，决定使用哪种ImageView
+            val mimeType = contentResolver.getType(imageUri)
+            val isGif = mimeType == "image/gif" || imageUri.toString().lowercase().endsWith(".gif")
+            android.util.Log.d("OverlayService", "文件类型检测: mimeType=$mimeType, isGif=$isGif, uri=$imageUri")
+            
+            if (isGif) {
+                // 使用GifImageView支持GIF动画
+                try {
+                    val inputStream: InputStream? = contentResolver.openInputStream(imageUri)
+                    if (inputStream != null) {
+                        val gifDrawable = GifDrawable(inputStream)
+                        imageView = GifImageView(this)
+                        (imageView as GifImageView).setImageDrawable(gifDrawable)
+                        // 确保GIF动画开始播放
+                        gifDrawable.start()
+                        inputStream.close()
+                        android.util.Log.d("OverlayService", "GIF加载成功并开始播放: $imageUri")
+                    } else {
+                        android.util.Log.e("OverlayService", "无法打开GIF文件: $imageUri")
+                        return false
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("OverlayService", "加载GIF失败，尝试备用方案: $imageUri", e)
+                    // 备用方案：使用标准ImageView + Glide
+                    try {
+                        imageView = ImageView(this)
+                        Glide.with(this)
+                            .asGif()
+                            .load(imageUri)
+                            .into(imageView as ImageView)
+                        android.util.Log.d("OverlayService", "使用Glide加载GIF成功: $imageUri")
+                    } catch (e2: Exception) {
+                        android.util.Log.e("OverlayService", "Glide加载GIF也失败: $imageUri", e2)
+                        return false
+                    }
+                }
+            } else {
+                // 使用标准ImageView支持PNG等静态图片
+                imageView = ImageView(this)
+                try {
+                    imageView?.setImageURI(imageUri)
+                    // 检查图片是否成功加载
+                    if (imageView?.drawable == null) {
+                        android.util.Log.e("OverlayService", "图片加载失败: $imageUri")
+                        return false
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("OverlayService", "设置图片失败: $imageUri", e)
                     return false
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("OverlayService", "设置图片失败: $imageUri", e)
-                return false
             }
             
             imageView?.scaleType = ImageView.ScaleType.FIT_XY
@@ -174,6 +230,7 @@ class OverlayService : Service() {
         imageView?.let { view ->
             val alpha = opacity / 100f
             view.alpha = alpha
+            android.util.Log.d("OverlayService", "透明度更新: $opacity%")
         }
     }
 

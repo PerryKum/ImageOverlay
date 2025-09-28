@@ -292,7 +292,7 @@ class SettingsFragment : Fragment() {
                         overlayDoc.listFiles().forEach { groupDoc ->
                             if (groupDoc.isDirectory) {
                                 groupDoc.listFiles().forEach { file ->
-                                    if (file.name?.endsWith(".png") == true && file.uri.toString() !in usedImages) {
+                                    if ((file.name?.endsWith(".png") == true || file.name?.endsWith(".gif") == true) && file.uri.toString() !in usedImages) {
                                         file.delete()
                                     }
                                 }
@@ -309,7 +309,7 @@ class SettingsFragment : Fragment() {
                     root.listFiles()?.forEach { groupDir ->
                         if (groupDir.isDirectory) {
                             groupDir.listFiles()?.forEach { file ->
-                                if (file.name.endsWith(".png") && file.absolutePath !in usedImages) {
+                                if ((file.name.endsWith(".png") || file.name.endsWith(".gif")) && file.absolutePath !in usedImages) {
                                     file.delete()
                                 }
                             }

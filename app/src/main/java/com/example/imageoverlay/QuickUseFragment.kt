@@ -49,6 +49,8 @@ class QuickUseFragment : Fragment() {
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = "image/png"
+                // 添加GIF支持
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/png", "image/gif"))
                 // 请求持久化权限
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)

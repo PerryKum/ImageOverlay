@@ -108,6 +108,8 @@ class GroupDetailFragment : Fragment() {
         btnSelectImage.setOnClickListener {
             val intent = Intent(Intent.ACTION_GET_CONTENT)
             intent.type = "image/png"
+            // 添加GIF支持
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/png", "image/gif"))
             startActivityForResult(intent, 200)
         }
         addConfigDialog = AlertDialog.Builder(requireContext())
@@ -124,16 +126,23 @@ class GroupDetailFragment : Fragment() {
                 Toast.makeText(requireContext(), "请选择图片", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            // 复制图片到保存路径/组名/配置名.png，支持 SAF
+            // 复制图片到保存路径/组名/配置名，支持 SAF，保持原格式
             val uriRoot = ConfigPathUtil.getConfigRoot(requireContext())
             val targetPath: String
+            
+            // 检测文件类型
+            val mimeType = requireContext().contentResolver.getType(selectedImageUri!!)
+            val isGif = mimeType == "image/gif" || selectedImageUri.toString().lowercase().endsWith(".gif")
+            val fileExtension = if (isGif) ".gif" else ".png"
+            val mimeTypeForSave = if (isGif) "image/gif" else "image/png"
+            
             if (uriRoot.startsWith("content://")) {
                 try {
                     val rootUri = android.net.Uri.parse(uriRoot)
                     val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(requireContext(), rootUri)
                     val overlayDoc = rootDoc?.findFile("ImageOverlay") ?: rootDoc?.createDirectory("ImageOverlay")
                     val groupDoc = overlayDoc?.findFile(groupName ?: "default") ?: overlayDoc?.createDirectory(groupName ?: "default")
-                    val configDoc = groupDoc?.createFile("image/png", name + ".png")
+                    val configDoc = groupDoc?.createFile(mimeTypeForSave, name + fileExtension)
                     val inputStream: InputStream? = requireContext().contentResolver.openInputStream(selectedImageUri!!)
                     val outputStream = configDoc?.uri?.let { requireContext().contentResolver.openOutputStream(it, "wt") }
                     if (inputStream == null || outputStream == null) throw java.lang.Exception("io null")
@@ -147,7 +156,7 @@ class GroupDetailFragment : Fragment() {
                 }
             } else {
                 val groupDir = ConfigPathUtil.getGroupDir(requireContext(), groupName ?: "default")
-                val fileName = name + ".png"
+                val fileName = name + fileExtension
                 val destFile = File(groupDir, fileName)
                 try {
                     val inputStream: InputStream? = requireContext().contentResolver.openInputStream(selectedImageUri!!)
@@ -192,10 +201,17 @@ class GroupDetailFragment : Fragment() {
         }
         if (requestCode == 201 && resultCode == Activity.RESULT_OK) {
             val img = data?.data ?: return
-            // 覆盖默认配置图片：这里改成“设置为默认配置”时才会用到；正常条目点击不再覆盖
+            // 覆盖默认配置图片：这里改成"设置为默认配置"时才会用到；正常条目点击不再覆盖
             val name = getCurrentGroup()?.configs?.firstOrNull()?.configName ?: "默认"
             val uriRoot = com.example.imageoverlay.util.ConfigPathUtil.getConfigRoot(requireContext())
             val targetPath: String
+            
+            // 检测文件类型
+            val mimeType = requireContext().contentResolver.getType(img)
+            val isGif = mimeType == "image/gif" || img.toString().lowercase().endsWith(".gif")
+            val fileExtension = if (isGif) ".gif" else ".png"
+            val mimeTypeForSave = if (isGif) "image/gif" else "image/png"
+            
             if (uriRoot.startsWith("content://")) {
                 try {
                     val rootUri = android.net.Uri.parse(uriRoot)
@@ -204,7 +220,7 @@ class GroupDetailFragment : Fragment() {
                     val groupDoc = overlayDoc?.findFile(groupName ?: "default") ?: overlayDoc?.createDirectory(groupName ?: "default")
                     // 删除旧文件并写入新文件
                     groupDoc?.listFiles()?.forEach { it.delete() }
-                    val configDoc = groupDoc?.createFile("image/png", name + ".png")
+                    val configDoc = groupDoc?.createFile(mimeTypeForSave, name + fileExtension)
                     val inputStream: java.io.InputStream? = requireContext().contentResolver.openInputStream(img)
                     val outputStream = configDoc?.uri?.let { requireContext().contentResolver.openOutputStream(it, "wt") }
                     if (inputStream == null || outputStream == null) throw java.lang.Exception("io null")
@@ -220,7 +236,7 @@ class GroupDetailFragment : Fragment() {
                 val groupDir = com.example.imageoverlay.util.ConfigPathUtil.getGroupDir(requireContext(), groupName ?: "default")
                 // 清空旧文件
                 groupDir.listFiles()?.forEach { it.delete() }
-                val destFile = java.io.File(groupDir, name + ".png")
+                val destFile = java.io.File(groupDir, name + fileExtension)
                 try {
                     val inputStream: java.io.InputStream? = requireContext().contentResolver.openInputStream(img)
                     val outputStream = java.io.FileOutputStream(destFile)
