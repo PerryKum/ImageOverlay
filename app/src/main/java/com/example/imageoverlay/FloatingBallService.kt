@@ -4,10 +4,15 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
+import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
@@ -29,6 +34,23 @@ class FloatingBallService : Service() {
     private var currentGroup: Group? = null
     private var ballParams: WindowManager.LayoutParams? = null
     private var popupParams: WindowManager.LayoutParams? = null
+    
+    // 桌面检测相关
+    private val homeCheckHandler = Handler(Looper.getMainLooper())
+    private val homeCheckIntervalMs = 1000L
+    private var lastHomeCheckTime = 0L
+    private var launcherStableSince = 0L
+    private val launcherPackages = setOf(
+        "com.android.launcher", "com.android.launcher2", "com.android.launcher3",
+        "com.google.android.launcher", "com.google.android.apps.nexuslauncher",
+        "com.samsung.android.launcher", "com.huawei.android.launcher",
+        "com.miui.home", "com.oneplus.launcher", "com.oppo.launcher",
+        "com.vivo.launcher", "com.meizu.flyme.launcher", "com.bbk.launcher2",
+        "com.sec.android.app.launcher", "com.lge.launcher2", "com.lge.launcher3",
+        "com.htc.launcher", "com.sonyericsson.home", "com.cyanogenmod.trebuchet",
+        "com.teslacoilsw.launcher", "com.nova.launcher", "com.launcher.settings",
+        "com.android.settings", "com.android.systemui"
+    )
     
     // 拖动相关变量
     private var initialX = 0
@@ -66,6 +88,8 @@ class FloatingBallService : Service() {
                 if (currentGroup != null) {
                     showFloatingBall()
                     android.util.Log.d("FloatingBallService", "为应用 $packageName 显示悬浮球，组: ${currentGroup!!.groupName}")
+                    // 启动桌面检测
+                    startHomeDetection()
                 } else {
                     android.util.Log.w("FloatingBallService", "未找到应用 $packageName 对应的组配置")
                     stopSelf()
@@ -161,6 +185,10 @@ class FloatingBallService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         android.util.Log.d("FloatingBallService", "服务销毁，清理资源")
+        // 停止桌面检测
+        try {
+            homeCheckHandler.removeCallbacksAndMessages(null)
+        } catch (_: Exception) {}
         
         try {
             // 清理所有视图
@@ -318,6 +346,57 @@ class FloatingBallService : Service() {
         // 悬浮球始终显示完整图标，隐藏文字
         ballIcon?.setImageResource(R.drawable.ic_floating_ball)
         ballText?.visibility = View.GONE
+    }
+
+    /**
+     * 启动桌面检测：如果用户回到桌面/启动器，则自动移除悬浮球并停止服务
+     */
+    private fun startHomeDetection() {
+        val checkRunnable = object : Runnable {
+            override fun run() {
+                try {
+                    if (isLauncherInForeground()) {
+                        if (launcherStableSince == 0L) launcherStableSince = System.currentTimeMillis()
+                        val stable = System.currentTimeMillis() - launcherStableSince >= 2500L
+                        if (stable) {
+                            android.util.Log.d("FloatingBallService", "检测到桌面稳定在前台，自动关闭悬浮球")
+                            destroyFloatingBall()
+                            return
+                        }
+                    } else {
+                        launcherStableSince = 0L
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("FloatingBallService", "桌面检测异常", e)
+                }
+                homeCheckHandler.postDelayed(this, homeCheckIntervalMs)
+            }
+        }
+        // 避免重复启动
+        homeCheckHandler.removeCallbacksAndMessages(null)
+        homeCheckHandler.postDelayed(checkRunnable, homeCheckIntervalMs)
+    }
+
+    /**
+     * 判断当前前台是否为桌面/启动器
+     */
+    private fun isLauncherInForeground(): Boolean {
+        val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val endTime = System.currentTimeMillis()
+        val startTime = endTime - 5000
+        val events = usageStatsManager.queryEvents(startTime, endTime)
+        val event = UsageEvents.Event()
+        var lastForegroundPackage: String? = null
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
+                lastForegroundPackage = event.packageName
+            }
+        }
+        val pkg = lastForegroundPackage ?: return false
+        // 排除 SystemUI，避免误判锁屏、通知下拉等
+        if (pkg == "com.android.systemui") return false
+        return launcherPackages.contains(pkg) || pkg.contains("launcher") || pkg.contains("home")
     }
     
     // 显示配置弹窗

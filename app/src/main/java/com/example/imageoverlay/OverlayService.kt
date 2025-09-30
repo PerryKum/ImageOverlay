@@ -84,6 +84,12 @@ class OverlayService : Service() {
                 val success = showOverlay(imageUri, newOpacity)
                 if (success) {
                     android.util.Log.d("OverlayService", "遮罩显示成功")
+                    // 广播状态：已启动
+                    try {
+                        val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
+                        stateIntent.putExtra("active", true)
+                        sendBroadcast(stateIntent)
+                    } catch (_: Exception) {}
                 } else {
                     android.util.Log.e("OverlayService", "遮罩显示失败，停止服务")
                     stopSelf()
@@ -251,6 +257,12 @@ class OverlayService : Service() {
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "清理快速使用状态失败", e)
         }
+        // 广播状态：已停止
+        try {
+            val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
+            stateIntent.putExtra("active", false)
+            sendBroadcast(stateIntent)
+        } catch (_: Exception) {}
     }
     
     override fun onTaskRemoved(rootIntent: Intent?) {
@@ -267,6 +279,12 @@ class OverlayService : Service() {
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "清理快速使用状态失败", e)
         }
+        // 广播状态：已停止
+        try {
+            val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
+            stateIntent.putExtra("active", false)
+            sendBroadcast(stateIntent)
+        } catch (_: Exception) {}
         stopSelf()
     }
 

@@ -2,6 +2,9 @@ package com.example.imageoverlay
 
 import android.app.Activity
 import android.content.Intent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -25,6 +28,7 @@ class QuickUseFragment : Fragment() {
     private val PREFS = "quick_use_prefs"
     private val KEY_OVERLAY_ACTIVE = "is_overlay_active"
     private val KEY_IMAGE_URI = "image_uri"
+    private var overlayStateReceiver: BroadcastReceiver? = null
 
 
 
@@ -120,7 +124,17 @@ class QuickUseFragment : Fragment() {
         // 简单恢复状态
         restoreState()
         updateButtonState()
+        // 注册遮罩状态广播接收器
+        registerOverlayStateReceiver()
     }
+    override fun onPause() {
+        super.onPause()
+        // 反注册广播接收器
+        try {
+            overlayStateReceiver?.let { requireContext().unregisterReceiver(it) }
+        } catch (_: Exception) {}
+    }
+
     
 
 
@@ -167,6 +181,27 @@ class QuickUseFragment : Fragment() {
             isOverlayActive = false
             imageUri = null
             saveState()
+        }
+    }
+
+    private fun registerOverlayStateReceiver() {
+        try {
+            if (overlayStateReceiver != null) return
+            overlayStateReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == "com.example.imageoverlay.OVERLAY_STATE_CHANGED") {
+                        val active = intent.getBooleanExtra("active", false)
+                        isOverlayActive = active
+                        saveState()
+                        updateButtonState()
+                        android.util.Log.d("QuickUseFragment", "收到遮罩状态广播: active=$active")
+                    }
+                }
+            }
+            val filter = IntentFilter("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
+            requireContext().registerReceiver(overlayStateReceiver, filter)
+        } catch (e: Exception) {
+            android.util.Log.e("QuickUseFragment", "注册遮罩状态接收器失败", e)
         }
     }
 

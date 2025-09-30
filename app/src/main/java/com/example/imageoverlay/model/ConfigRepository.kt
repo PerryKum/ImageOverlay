@@ -285,18 +285,7 @@ object ConfigRepository {
         try {
             val currentTime = System.currentTimeMillis()
             
-            // 检查操作冷却时间，防止频繁操作
-            if (currentTime - lastOperationTime < OPERATION_COOLDOWN) {
-                android.util.Log.d("ConfigRepository", "操作冷却中，跳过处理: $packageName")
-                return
-            }
-            
-            // 检查是否有最近的手动操作，如果有则跳过自动处理
-            if (currentTime - lastManualOperationTime < MANUAL_OPERATION_COOLDOWN) {
-                android.util.Log.d("ConfigRepository", "检测到最近手动操作，跳过自动处理: $packageName")
-                return
-            }
-            
+            // 特殊：桌面事件不受任何冷却或手动操作限制，必须优先处理
             if (isLauncher) {
                 // 检测到桌面/启动器
                 android.util.Log.d("ConfigRepository", "检测到桌面/启动器")
@@ -320,6 +309,19 @@ object ConfigRepository {
                     setDefaultActive(context, false)
                     android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置状态不关闭遮罩")
                 }
+                return
+            }
+            
+            // 非桌面事件才应用冷却与手动操作屏蔽
+            // 检查操作冷却时间，防止频繁操作
+            if (currentTime - lastOperationTime < OPERATION_COOLDOWN) {
+                android.util.Log.d("ConfigRepository", "操作冷却中，跳过处理: $packageName")
+                return
+            }
+            
+            // 检查是否有最近的手动操作，如果有则跳过自动处理
+            if (currentTime - lastManualOperationTime < MANUAL_OPERATION_COOLDOWN) {
+                android.util.Log.d("ConfigRepository", "检测到最近手动操作，跳过自动处理: $packageName")
                 return
             }
             

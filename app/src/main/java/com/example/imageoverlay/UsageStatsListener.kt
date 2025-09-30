@@ -31,8 +31,7 @@ class UsageStatsListener(private val context: Context) {
         "com.vivo.launcher", "com.meizu.flyme.launcher", "com.bbk.launcher2",
         "com.sec.android.app.launcher", "com.lge.launcher2", "com.lge.launcher3",
         "com.htc.launcher", "com.sonyericsson.home", "com.cyanogenmod.trebuchet",
-        "com.teslacoilsw.launcher", "com.nova.launcher", "com.launcher.settings",
-        "com.android.settings", "com.android.systemui"
+        "com.teslacoilsw.launcher", "com.nova.launcher"
     )
 
     fun start() {
@@ -114,8 +113,7 @@ class UsageStatsListener(private val context: Context) {
     private fun isLauncherPackage(packageName: String): Boolean {
         return launcherPackages.contains(packageName) || 
                packageName.contains("launcher") || 
-               packageName.contains("home") ||
-               packageName == "com.android.systemui"
+               packageName.contains("home")
     }
 
     companion object {
