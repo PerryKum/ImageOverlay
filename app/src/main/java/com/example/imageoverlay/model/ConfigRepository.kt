@@ -141,20 +141,28 @@ object ConfigRepository {
     private fun hasValidSafPermission(context: Context, uri: Uri): Boolean {
         return try {
             // 检查是否有持久化权限
-            val flags = context.contentResolver.getPersistedUriPermissions()
-            val hasPermission = flags.any { permission ->
-                permission.uri == uri && 
-                (permission.isReadPermission || permission.isWritePermission)
-            }
-            
-            if (!hasPermission) {
-                android.util.Log.w("ConfigRepository", "没有SAF持久化权限")
+            // 注意：不能简单用 == 比较 URI，因为可能存在编码差异
+            // 直接尝试访问目录来验证权限是否有效
+            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
+            if (docFile == null || !docFile.exists()) {
+                android.util.Log.w("ConfigRepository", "SAF目录不存在或无法访问")
                 return false
             }
             
-            // 尝试访问目录来验证权限
-            val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
-            docFile?.exists() == true && docFile.isDirectory
+            // 尝试列出目录内容来验证读权限
+            val canRead = try {
+                docFile.listFiles().isNotEmpty() || docFile.isDirectory
+            } catch (e: Exception) {
+                // 即使目录为空，只要能访问就认为有权限
+                docFile.isDirectory
+            }
+            
+            if (!canRead) {
+                android.util.Log.w("ConfigRepository", "SAF权限无效，无法读取目录")
+                return false
+            }
+            
+            true
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "SAF权限检查失败", e)
             false
