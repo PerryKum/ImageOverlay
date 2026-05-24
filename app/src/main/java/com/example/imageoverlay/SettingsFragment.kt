@@ -27,6 +27,8 @@ class SettingsFragment : Fragment() {
 
     sealed class SettingItem {
         data class TextItem(val title: String, val value: String, val action: () -> Unit) : SettingItem()
+        /** 无副标题，右侧 ›，用于进入子页面 */
+        data class LinkItem(val title: String, val action: () -> Unit) : SettingItem()
         data class SwitchItem(val title: String, val description: String, val isChecked: Boolean, val onCheckedChange: (Boolean) -> Unit) : SettingItem()
         data class SliderItem(val title: String, val description: String, val value: Int, val maxValue: Int, val onValueChange: (Int) -> Unit) : SettingItem()
     }
@@ -56,10 +58,14 @@ class SettingsFragment : Fragment() {
                 // 进入运行条件检测页面
                 startActivity(android.content.Intent(requireContext(), RequirementsActivity::class.java))
             },
-            SettingItem.TextItem("绑定实体按键", getBoundKeysSummary()) { 
-                    val intent = android.content.Intent(requireContext(), KeyBindingActivity::class.java)
-                    startActivity(intent)
-                },
+            SettingItem.LinkItem("绑定实体按键") {
+                startActivity(
+                    android.content.Intent().setClassName(
+                        requireContext(),
+                        "com.example.imageoverlay.keybinding.KeyBindingActivity"
+                    )
+                )
+            },
             SettingItem.SwitchItem(
                 "自动开启/关闭遮罩", 
                 "启动绑定组的软件时自动开启对应遮罩，离开时自动关闭", 
@@ -82,7 +88,15 @@ class SettingsFragment : Fragment() {
                 com.example.imageoverlay.model.ConfigRepository.isFloatingBallEnabled(requireContext())
             ) { isChecked ->
                 com.example.imageoverlay.model.ConfigRepository.setFloatingBallEnabled(requireContext(), isChecked)
-                Toast.makeText(requireContext(), if (isChecked) "已开启悬浮球功能" else "已关闭悬浮球功能", Toast.LENGTH_SHORT).show()
+                if (!isChecked) {
+                    com.example.imageoverlay.util.FloatingBallLauncher.stop(requireContext())
+                }
+                Toast.makeText(
+                    requireContext(),
+                    if (isChecked) getString(R.string.floating_ball_enabled)
+                    else getString(R.string.floating_ball_disabled),
+                    Toast.LENGTH_SHORT
+                ).show()
             },
             SettingItem.SliderItem(
                 "全局遮罩透明度",
@@ -405,13 +419,18 @@ class SettingsAdapter(
     
     companion object {
         private const val VIEW_TYPE_TEXT = 0
-        private const val VIEW_TYPE_SWITCH = 1
-        private const val VIEW_TYPE_SLIDER = 2
+        private const val VIEW_TYPE_LINK = 1
+        private const val VIEW_TYPE_SWITCH = 2
+        private const val VIEW_TYPE_SLIDER = 3
     }
 
     class TextViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
         val tvTitle: TextView = itemView.findViewById(R.id.tvTitle)
         val tvValue: TextView = itemView.findViewById(R.id.tvValue)
+    }
+
+    class LinkViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
+        val tvTitle: TextView = itemView.findViewById(R.id.tvTitle)
     }
 
     class SwitchViewHolder(itemView: View) : RecyclerView.ViewHolder(itemView) {
@@ -430,6 +449,7 @@ class SettingsAdapter(
     override fun getItemViewType(position: Int): Int {
         return when (items[position]) {
             is SettingsFragment.SettingItem.TextItem -> VIEW_TYPE_TEXT
+            is SettingsFragment.SettingItem.LinkItem -> VIEW_TYPE_LINK
             is SettingsFragment.SettingItem.SwitchItem -> VIEW_TYPE_SWITCH
             is SettingsFragment.SettingItem.SliderItem -> VIEW_TYPE_SLIDER
         }
@@ -440,6 +460,10 @@ class SettingsAdapter(
             VIEW_TYPE_TEXT -> {
                 val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting, parent, false)
                 TextViewHolder(view)
+            }
+            VIEW_TYPE_LINK -> {
+                val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting_link, parent, false)
+                LinkViewHolder(view)
             }
             VIEW_TYPE_SWITCH -> {
                 val view = LayoutInflater.from(parent.context).inflate(R.layout.item_setting_switch, parent, false)
@@ -460,6 +484,11 @@ class SettingsAdapter(
                 textHolder.tvTitle.text = item.title
                 textHolder.tvValue.text = item.value
                 textHolder.itemView.setOnClickListener { item.action() }
+            }
+            is SettingsFragment.SettingItem.LinkItem -> {
+                val linkHolder = holder as LinkViewHolder
+                linkHolder.tvTitle.text = item.title
+                linkHolder.itemView.setOnClickListener { item.action() }
             }
             is SettingsFragment.SettingItem.SwitchItem -> {
                 val switchHolder = holder as SwitchViewHolder

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <dimen name="floating_ball_expanded_size">40dp</dimen>
+    <dimen name="floating_ball_peek_draw_width">10dp</dimen>
+    <dimen name="floating_ball_peek_height">32dp</dimen>
+    <dimen name="floating_ball_touch_width">16dp</dimen>
+    <dimen name="quick_use_preview_height">160dp</dimen>
+    <dimen name="quick_use_preview_height_dual">120dp</dimen>
+</resources>

@@ -5,40 +5,34 @@
     android:fillViewport="true">
 
     <LinearLayout
-        android:orientation="vertical"
+        android:id="@+id/quickUseContainer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:gravity="center"
-        android:padding="16dp">
+        android:orientation="vertical"
+        android:padding="12dp">
 
-        <ImageView
-            android:id="@+id/imageView"
-            android:layout_width="200dp"
-            android:layout_height="200dp"
-            android:scaleType="fitCenter"
-            android:background="@color/io_thumb_bg"/>
+        <include
+            android:id="@+id/panelMain"
+            layout="@layout/layout_quick_use_panel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content" />
 
-        <Button
-            android:id="@+id/btnSelect"
-            android:layout_width="wrap_content"
+        <View
+            android:id="@+id/panelDivider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:layout_marginVertical="8dp"
+            android:background="#33FFFFFF"
+            android:visibility="gone" />
+
+        <include
+            android:id="@+id/panelSecondary"
+            layout="@layout/layout_quick_use_panel"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/select_image" />
-
-        <Button
-            android:id="@+id/btnStart"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/start_overlay" />
-
-        <Button
-            android:id="@+id/btnStop"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/stop_overlay" />
+            android:visibility="gone" />
 
     </LinearLayout>
 
-</ScrollView> 
+</ScrollView>

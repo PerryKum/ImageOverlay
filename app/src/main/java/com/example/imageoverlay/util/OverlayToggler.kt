@@ -8,199 +8,114 @@ import com.example.imageoverlay.model.ConfigRepository
 
 /**
  * 遮罩开关工具类，统一处理默认遮罩的开启/关闭逻辑
- * 供磁贴服务、按键绑定服务等复用
  */
 object OverlayToggler {
-    
-    /**
-     * 切换默认遮罩状态
-     * @param context 上下文
-     * @return 切换后的状态，true表示已开启，false表示已关闭
-     */
-    fun toggleDefaultOverlay(context: Context): Boolean {
-        val currentlyActive = ConfigRepository.isDefaultActive(context)
-        
-        if (currentlyActive) {
-            // 关闭遮罩
-            turnOffOverlay(context)
-            return false
+
+    /** 磁贴 / 旧接口：双屏时同时切换主副屏 */
+    fun toggleDefaultOverlay(context: Context): Boolean = toggleOverlayBoth(context)
+
+    fun toggleOverlayBoth(context: Context): Boolean {
+        val hasSecondary = DisplayUtil.hasSecondaryDisplay(context)
+        val mainOn = ConfigRepository.isOverlayRunningForScreenType(context, "main")
+        val secondaryOn = hasSecondary &&
+            ConfigRepository.isOverlayRunningForScreenType(context, "secondary")
+        val anyOn = mainOn || secondaryOn
+
+        return if (anyOn) {
+            turnOffOverlayForScreenType(context, "main")
+            if (hasSecondary) {
+                turnOffOverlayForScreenType(context, "secondary")
+            }
+            false
         } else {
-            // 开启遮罩
-            return turnOnOverlay(context)
+            val mainOk = turnOnOverlayForScreenType(context, "main")
+            val secondaryOk = if (hasSecondary) {
+                turnOnOverlayForScreenType(context, "secondary")
+            } else {
+                true
+            }
+            mainOk || secondaryOk
         }
     }
-    
-    /**
-     * 关闭遮罩
-     */
-    fun turnOffOverlay(context: Context) {
+
+    fun toggleOverlayForScreenType(context: Context, screenType: String): Boolean {
+        return if (ConfigRepository.isOverlayRunningForScreenType(context, screenType)) {
+            turnOffOverlayForScreenType(context, screenType)
+            false
+        } else {
+            turnOnOverlayForScreenType(context, screenType)
+        }
+    }
+
+    fun turnOffOverlayForScreenType(context: Context, screenType: String) {
         try {
-            val stopIntent = Intent(context, OverlayService::class.java)
-            context.stopService(stopIntent)
-            ConfigRepository.setDefaultActive(context, false)
+            OverlayService.stopDisplay(
+                context,
+                ConfigRepository.displayKeyForScreenType(context, screenType)
+            )
+            ConfigRepository.setDefaultActive(context, false, screenType)
+            ConfigRepository.clearActiveConfigsForScreenType(screenType)
+            ConfigRepository.save(context)
         } catch (e: Exception) {
-            android.util.Log.e("OverlayToggler", "关闭遮罩失败", e)
+            android.util.Log.e("OverlayToggler", "关闭遮罩失败 screen=$screenType", e)
         }
     }
-    
-    /**
-     * 开启默认遮罩
-     * @param context 上下文
-     * @return 是否成功开启
-     */
-    fun turnOnOverlay(context: Context): Boolean {
+
+    fun turnOnOverlayForScreenType(context: Context, screenType: String): Boolean {
         return try {
-            // 检查权限
             if (!PermissionUtil.checkOverlayPermission(context)) {
                 android.util.Log.w("OverlayToggler", "悬浮窗权限未授予")
                 return false
             }
-            
-            val defaultConfig = ConfigRepository.getDefaultConfig(context)
-            if (defaultConfig == null || defaultConfig.imageUri.isBlank()) {
-                android.util.Log.w("OverlayToggler", "默认配置为空")
+
+            val config = ConfigRepository.resolveOverlayConfigForScreenType(context, screenType)
+            if (config == null || config.imageUri.isBlank()) {
+                android.util.Log.w("OverlayToggler", "无可用遮罩配置 screen=$screenType")
                 return false
             }
-            
-            // 先停止所有遮罩
-            val stopIntent = Intent(context, OverlayService::class.java)
-            context.stopService(stopIntent)
-            
-            // 关闭其他预设的激活状态
-            ConfigRepository.getGroups().forEach { group ->
-                group.configs.forEach { config -> config.active = false }
+
+            ConfigRepository.clearActiveConfigsForScreenType(screenType)
+            val group = ConfigRepository.findGroupWithActiveOrDefaultConfig(screenType, config)
+            group?.let { g ->
+                g.configs.find { it.configName == config.configName }?.active = true
             }
             ConfigRepository.save(context)
-            
-            // 启动默认遮罩
+
             val intent = Intent(context, OverlayService::class.java)
-            intent.putExtra("imageUri", defaultConfig.imageUri)
+            intent.putExtra("imageUri", config.imageUri)
             intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(context))
-            
+            if (screenType == "secondary") {
+                intent.putExtra(
+                    OverlayService.EXTRA_DISPLAY_ID,
+                    ConfigRepository.displayKeyForScreenType(context, screenType)
+                )
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
                 context.startService(intent)
             }
-            
-            ConfigRepository.setDefaultActive(context, true)
+
+            ConfigRepository.setDefaultActive(context, true, screenType)
             true
         } catch (e: Exception) {
-            android.util.Log.e("OverlayToggler", "开启遮罩失败", e)
+            android.util.Log.e("OverlayToggler", "开启遮罩失败 screen=$screenType", e)
             false
         }
     }
-    
-    /**
-     * 检查遮罩是否处于活跃状态
-     */
+
+    /** @deprecated 使用 turnOffOverlayForScreenType */
+    fun turnOffOverlay(context: Context) = turnOffOverlayForScreenType(context, "main")
+
+    /** @deprecated 使用 turnOnOverlayForScreenType */
+    fun turnOnOverlay(context: Context): Boolean = turnOnOverlayForScreenType(context, "main")
+
     fun isOverlayActive(context: Context): Boolean {
-        return ConfigRepository.isDefaultActive(context)
-    }
-    
-    /**
-     * 切换到下一张图片
-     */
-    fun switchToNextImage(context: Context) {
-        try {
-            val groups = ConfigRepository.getGroups()
-            if (groups.isEmpty()) return
-            
-            val currentGroup = groups.find { it.configs.any { config -> config.active } }
-            val currentConfig = currentGroup?.configs?.find { it.active }
-            
-            if (currentGroup != null && currentConfig != null) {
-                val configs = currentGroup.configs
-                val currentIndex = configs.indexOf(currentConfig)
-                val nextIndex = (currentIndex + 1) % configs.size
-                val nextConfig = configs[nextIndex]
-                
-                // 停止当前遮罩
-                val stopIntent = Intent(context, OverlayService::class.java)
-                context.stopService(stopIntent)
-                
-                // 启动新的遮罩
-                val intent = Intent(context, OverlayService::class.java)
-                intent.putExtra("imageUri", nextConfig.imageUri)
-                intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(context))
-                
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
-                
-                // 更新激活状态
-                configs.forEach { it.active = false }
-                nextConfig.active = true
-                ConfigRepository.save(context)
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("OverlayToggler", "切换到下一张图片失败", e)
+        val main = ConfigRepository.isOverlayRunningForScreenType(context, "main")
+        if (!DisplayUtil.hasSecondaryDisplay(context)) {
+            return main
         }
-    }
-    
-    /**
-     * 切换到上一张图片
-     */
-    fun switchToPreviousImage(context: Context) {
-        try {
-            val groups = ConfigRepository.getGroups()
-            if (groups.isEmpty()) return
-            
-            val currentGroup = groups.find { it.configs.any { config -> config.active } }
-            val currentConfig = currentGroup?.configs?.find { it.active }
-            
-            if (currentGroup != null && currentConfig != null) {
-                val configs = currentGroup.configs
-                val currentIndex = configs.indexOf(currentConfig)
-                val previousIndex = if (currentIndex - 1 < 0) configs.size - 1 else currentIndex - 1
-                val previousConfig = configs[previousIndex]
-                
-                // 停止当前遮罩
-                val stopIntent = Intent(context, OverlayService::class.java)
-                context.stopService(stopIntent)
-                
-                // 启动新的遮罩
-                val intent = Intent(context, OverlayService::class.java)
-                intent.putExtra("imageUri", previousConfig.imageUri)
-                intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(context))
-                
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    context.startForegroundService(intent)
-                } else {
-                    context.startService(intent)
-                }
-                
-                // 更新激活状态
-                configs.forEach { it.active = false }
-                previousConfig.active = true
-                ConfigRepository.save(context)
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("OverlayToggler", "切换到上一张图片失败", e)
-        }
-    }
-    
-    /**
-     * 调整透明度
-     * @param delta 透明度变化值，正数增加，负数减少
-     */
-    fun adjustOpacity(context: Context, delta: Float) {
-        try {
-            val currentOpacity = ConfigRepository.getDefaultOpacity(context)
-            val newOpacity = (currentOpacity + delta).coerceIn(0.1f, 1.0f)
-            ConfigRepository.setDefaultOpacity(context, (newOpacity * 100).toInt())
-            
-            // 如果遮罩正在运行，更新其透明度
-            if (ConfigRepository.isDefaultActive(context)) {
-                val intent = Intent(context, OverlayService::class.java)
-                intent.putExtra("action", "update_opacity")
-                intent.putExtra("opacity", newOpacity)
-                context.startService(intent)
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("OverlayToggler", "调整透明度失败", e)
-        }
+        return main || ConfigRepository.isOverlayRunningForScreenType(context, "secondary")
     }
 }

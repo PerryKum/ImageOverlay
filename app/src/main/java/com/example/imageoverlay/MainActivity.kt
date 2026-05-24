@@ -162,15 +162,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        try { com.example.imageoverlay.util.AppStateUtil.setInAppActive(this, true) } catch (_: Exception) {}
-    }
-
-    override fun onPause() {
-        super.onPause()
-        try { com.example.imageoverlay.util.AppStateUtil.setInAppActive(this, false) } catch (_: Exception) {}
-    }
     
     private fun setupNavigation() {
         val bottomNav = findViewById<com.google.android.material.bottomnavigation.BottomNavigationView>(R.id.bottom_navigation)
@@ -252,6 +243,18 @@ class MainActivity : AppCompatActivity() {
             if (configRoot.isBlank() && !isDialogShowing) {
                 // 只有在没有设置路径且对话框未显示时才再次显示对话框
                 showForcePickDirectoryDialog()
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val configRoot = ConfigPathUtil.getConfigRoot(this)
+        if (configRoot.isNotBlank()) {
+            try {
+                ConfigRepository.load(this)
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "onResume 重新加载配置失败", e)
             }
         }
     }

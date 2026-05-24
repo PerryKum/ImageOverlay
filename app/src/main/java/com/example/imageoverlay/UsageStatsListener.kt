@@ -7,6 +7,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.LauncherUtil
 import java.util.concurrent.Executors
 
 class UsageStatsListener(private val context: Context) {
@@ -22,18 +23,6 @@ class UsageStatsListener(private val context: Context) {
     private var lastLauncherTime = 0L // 记录最后一次检测到桌面的时间
     private val LAUNCHER_COOLDOWN = 5000L // 桌面检测冷却时间5秒
     
-    // 桌面/启动器包名列表，用于检测用户是否在桌面
-    private val launcherPackages = setOf(
-        "com.android.launcher", "com.android.launcher2", "com.android.launcher3",
-        "com.google.android.launcher", "com.google.android.apps.nexuslauncher",
-        "com.samsung.android.launcher", "com.huawei.android.launcher",
-        "com.miui.home", "com.oneplus.launcher", "com.oppo.launcher",
-        "com.vivo.launcher", "com.meizu.flyme.launcher", "com.bbk.launcher2",
-        "com.sec.android.app.launcher", "com.lge.launcher2", "com.lge.launcher3",
-        "com.htc.launcher", "com.sonyericsson.home", "com.cyanogenmod.trebuchet",
-        "com.teslacoilsw.launcher", "com.nova.launcher"
-    )
-
     fun start() {
         if (isRunning) return
         isRunning = true
@@ -82,19 +71,28 @@ class UsageStatsListener(private val context: Context) {
                         try {
                             val currentTime = System.currentTimeMillis()
                             
-                            // 检查是否是桌面/启动器应用
-                            if (isLauncherPackage(packageName)) {
-                                // 桌面检测需要额外的冷却时间，防止频繁触发
-                                if (currentTime - lastLauncherTime > LAUNCHER_COOLDOWN) {
-                                    lastLauncherTime = currentTime
-                                    Log.d("UsageStatsListener", "检测到桌面/启动器: $packageName")
-                                    ConfigRepository.handleAppLaunch(context, packageName, isLauncher = true)
-                                } else {
-                                    Log.d("UsageStatsListener", "桌面检测冷却中，跳过: $packageName")
+                            when {
+                                LauncherUtil.isLauncherPackage(packageName) -> {
+                                    if (currentTime - lastLauncherTime > LAUNCHER_COOLDOWN) {
+                                        lastLauncherTime = currentTime
+                                        Log.d("UsageStatsListener", "检测到桌面: $packageName")
+                                        ConfigRepository.handleAppLaunch(
+                                            context, packageName, isLauncher = true
+                                        )
+                                    }
                                 }
-                            } else {
-                                Log.d("UsageStatsListener", "检测到普通应用: $packageName")
-                                ConfigRepository.handleAppLaunch(context, packageName, isLauncher = false)
+                                ConfigRepository.getGroupByPackageName(packageName) != null -> {
+                                    Log.d("UsageStatsListener", "检测到绑定应用: $packageName")
+                                    ConfigRepository.handleAppLaunch(
+                                        context, packageName, isLauncher = false
+                                    )
+                                }
+                                else -> {
+                                    Log.d(
+                                        "UsageStatsListener",
+                                        "忽略非绑定前台切换: $packageName"
+                                    )
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e("UsageStatsListener", "处理应用启动事件失败", e)
@@ -107,15 +105,6 @@ class UsageStatsListener(private val context: Context) {
         }
     }
     
-    /**
-     * 检查包名是否为桌面/启动器应用
-     */
-    private fun isLauncherPackage(packageName: String): Boolean {
-        return launcherPackages.contains(packageName) || 
-               packageName.contains("launcher") || 
-               packageName.contains("home")
-    }
-
     companion object {
         private var instance: UsageStatsListener? = null
 

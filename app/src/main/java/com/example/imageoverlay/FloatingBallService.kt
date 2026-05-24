@@ -10,6 +10,9 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
 import android.os.Build
+import android.animation.ValueAnimator
+import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
@@ -17,14 +20,27 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.view.ViewGroup
+import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.appcompat.view.ContextThemeWrapper
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import android.view.GestureDetector
 import com.example.imageoverlay.model.Config
 import com.example.imageoverlay.model.ConfigRepository
 import com.example.imageoverlay.model.Group
+import com.example.imageoverlay.util.DisplayUtil
+import com.example.imageoverlay.util.AppStateUtil
+import com.example.imageoverlay.util.ForegroundAppUtil
+import com.example.imageoverlay.util.LauncherUtil
+import com.example.imageoverlay.util.OverlayToggler
+import com.example.imageoverlay.util.PermissionUtil
+import com.google.android.material.tabs.TabLayout
 
 class FloatingBallService : Service() {
     private var windowManager: WindowManager? = null
@@ -40,28 +56,33 @@ class FloatingBallService : Service() {
     private val homeCheckIntervalMs = 1000L
     private var lastHomeCheckTime = 0L
     private var launcherStableSince = 0L
-    private val launcherPackages = setOf(
-        "com.android.launcher", "com.android.launcher2", "com.android.launcher3",
-        "com.google.android.launcher", "com.google.android.apps.nexuslauncher",
-        "com.samsung.android.launcher", "com.huawei.android.launcher",
-        "com.miui.home", "com.oneplus.launcher", "com.oppo.launcher",
-        "com.vivo.launcher", "com.meizu.flyme.launcher", "com.bbk.launcher2",
-        "com.sec.android.app.launcher", "com.lge.launcher2", "com.lge.launcher3",
-        "com.htc.launcher", "com.sonyericsson.home", "com.cyanogenmod.trebuchet",
-        "com.teslacoilsw.launcher", "com.nova.launcher", "com.launcher.settings",
-        "com.android.settings", "com.android.systemui"
-    )
-    
     // 拖动相关变量
     private var initialX = 0
     private var initialY = 0
     private var initialTouchX = 0f
     private var initialTouchY = 0f
     private var isDragging = false
-    
+    private var collapsedAtTouchDown = false
+    private var dragExpandedFromPeek = false
+
     // 悬浮球状态
     private var isOnLeftSide = false
-    private var isExpanded = false // 悬浮窗是否展开
+    private var isExpanded = false // 配置弹窗是否展开
+    private var isBallCollapsed = false // 贴边收起态
+    private var popupScreenType: String = "main"
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val autoCollapseRunnable = Runnable {
+        if (!isExpanded && !isBallCollapsed) {
+            collapseBall()
+        }
+    }
+    private var expandedSizePx = 0
+    private var touchWidthPx = 0
+    private var peekHeightPx = 0
+    private var peekDrawWidthPx = 0
+    private var touchSlopPx = 0
+    private var autoCollapseDelayMs = 3000L
+    private lateinit var tapDetector: GestureDetector
     
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -78,26 +99,54 @@ class FloatingBallService : Service() {
                 .build()
             startForeground(2, notification)
 
-            val packageName = intent?.getStringExtra("packageName")
-            if (packageName != null) {
-                // 根据包名找到对应的组
-                currentGroup = ConfigRepository.getGroups().find { group ->
-                    group.boundPackageName == packageName
-                }
-                
-                if (currentGroup != null) {
-                    showFloatingBall()
-                    android.util.Log.d("FloatingBallService", "为应用 $packageName 显示悬浮球，组: ${currentGroup!!.groupName}")
-                    // 启动桌面检测
-                    startHomeDetection()
-                } else {
-                    android.util.Log.w("FloatingBallService", "未找到应用 $packageName 对应的组配置")
-                    stopSelf()
-                }
-            } else {
-                android.util.Log.w("FloatingBallService", "包名为空，停止服务")
+            if (!ConfigRepository.isFloatingBallEnabled(this)) {
+                android.util.Log.d("FloatingBallService", "悬浮球功能已关闭")
                 stopSelf()
+                return START_NOT_STICKY
             }
+
+            if (!PermissionUtil.checkOverlayPermission(this)) {
+                android.util.Log.w("FloatingBallService", "无悬浮窗权限，无法显示悬浮球")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            if (AppStateUtil.isInAppActive(applicationContext)) {
+                android.util.Log.d("FloatingBallService", "本应用内不显示悬浮球")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            val packageName = intent?.getStringExtra(EXTRA_PACKAGE_NAME)
+            if (packageName.isNullOrBlank() || packageName == applicationContext.packageName) {
+                android.util.Log.w("FloatingBallService", "无有效绑定应用包名，停止服务")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            val foreground = ForegroundAppUtil.getRecentForegroundPackage(this)
+            if (foreground == applicationContext.packageName) {
+                android.util.Log.d("FloatingBallService", "本应用在前台，停止服务")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            currentGroup = ConfigRepository.getGroupByPackageName(packageName)
+            if (currentGroup == null) {
+                android.util.Log.w("FloatingBallService", "包名未绑定配置组: $packageName")
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            if (floatingBallView != null) {
+                removeFloatingBall()
+            }
+            showFloatingBall()
+            startHomeDetection()
+            android.util.Log.d(
+                "FloatingBallService",
+                "悬浮球已显示 package=$packageName group=${currentGroup?.groupName}"
+            )
         } catch (e: Exception) {
             android.util.Log.e("FloatingBallService", "onStartCommand异常", e)
             stopSelf()
@@ -108,15 +157,13 @@ class FloatingBallService : Service() {
     private fun showFloatingBall() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-            
-            // 创建悬浮球视图
+
             val inflater = LayoutInflater.from(this)
             floatingBallView = inflater.inflate(R.layout.floating_ball, null)
-            
-            val ballIcon = floatingBallView?.findViewById<ImageView>(R.id.ballIcon)
-            val ballText = floatingBallView?.findViewById<TextView>(R.id.ballText)
-            
-            // 设置悬浮球参数
+
+            initBallDimensions()
+            updatePeekAppearance()
+
             ballParams = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
@@ -125,26 +172,43 @@ class FloatingBallService : Service() {
                 else
                     WindowManager.LayoutParams.TYPE_PHONE,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
-            
-            // 设置悬浮球初始位置（右侧中间）
+
+            touchSlopPx = ViewConfiguration.get(this).scaledTouchSlop
+            tapDetector = GestureDetector(
+                this,
+                object : GestureDetector.SimpleOnGestureListener() {
+                    override fun onDown(e: MotionEvent): Boolean = true
+
+                    override fun onSingleTapUp(e: MotionEvent): Boolean {
+                        if (isDragging) return false
+                        handleBallTap()
+                        return true
+                    }
+                }
+            )
             ballParams?.gravity = Gravity.TOP or Gravity.START
-            ballParams?.x = getScreenWidth() - 100 // 距离右边缘100px
-            ballParams?.y = getScreenHeight() / 2 - 50 // 屏幕中间
             isOnLeftSide = false
-            
-            // 设置触摸事件监听器
-            floatingBallView?.setOnTouchListener { view, event ->
-                handleTouchEvent(view, event)
+            isBallCollapsed = false
+            ballParams?.y = getScreenHeight() / 2 - expandedSizePx / 2
+
+            floatingBallView?.apply {
+                isClickable = true
+                isFocusable = false
+                setOnTouchListener { _, event -> handleTouchEvent(event) }
             }
-            
+            disableTouchOnBallChildren(floatingBallView)
+
+            syncBallWindowLayout()
             windowManager?.addView(floatingBallView, ballParams)
+            scheduleAutoCollapse(4000L)
             android.util.Log.d("FloatingBallService", "悬浮球显示成功")
-            
         } catch (e: Exception) {
             android.util.Log.e("FloatingBallService", "显示悬浮球失败", e)
+            stopSelf()
         }
     }
 
@@ -188,6 +252,7 @@ class FloatingBallService : Service() {
         // 停止桌面检测
         try {
             homeCheckHandler.removeCallbacksAndMessages(null)
+            uiHandler.removeCallbacks(autoCollapseRunnable)
         } catch (_: Exception) {}
         
         try {
@@ -241,89 +306,247 @@ class FloatingBallService : Service() {
         }
     }
     
-    // 处理触摸事件
-    private fun handleTouchEvent(view: View, event: MotionEvent): Boolean {
+    private fun handleTouchEvent(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
+                cancelAutoCollapse()
+                collapsedAtTouchDown = isBallCollapsed
+                dragExpandedFromPeek = false
                 initialX = ballParams?.x ?: 0
                 initialY = ballParams?.y ?: 0
                 initialTouchX = event.rawX
                 initialTouchY = event.rawY
                 isDragging = false
-                return true
             }
             MotionEvent.ACTION_MOVE -> {
                 val deltaX = (event.rawX - initialTouchX).toInt()
                 val deltaY = (event.rawY - initialTouchY).toInt()
-                
-                // 如果移动距离超过阈值，开始拖动
-                if (Math.abs(deltaX) > 10 || Math.abs(deltaY) > 10) {
+                val slop = touchSlopPx
+
+                if (kotlin.math.abs(deltaX) > slop || kotlin.math.abs(deltaY) > slop) {
                     isDragging = true
                 }
-                
+
                 if (isDragging) {
-                    val newX = initialX + deltaX
-                    val newY = initialY + deltaY
-                    
-                    // 限制在屏幕范围内
+                    if (collapsedAtTouchDown && isBallCollapsed) {
+                        expandBall()
+                        dragExpandedFromPeek = true
+                        collapsedAtTouchDown = false
+                        initialX = ballParams?.x ?: initialX
+                        initialY = ballParams?.y ?: initialY
+                    }
+
                     val screenWidth = getScreenWidth()
                     val screenHeight = getScreenHeight()
-                    val ballWidth = 100 // 悬浮球宽度
-                    val ballHeight = 100 // 悬浮球高度
-                    
-                    ballParams?.x = newX.coerceIn(0, screenWidth - ballWidth)
+                    val ballWidth = expandedSizePx
+                    val ballHeight = expandedSizePx
+                    val newX = initialX + deltaX
+                    val newY = initialY + deltaY
+                    ballParams?.width = ballWidth
+                    ballParams?.height = ballHeight
+                    ballParams?.x = newX.coerceIn(-ballWidth / 2, screenWidth - ballWidth / 2)
                     ballParams?.y = newY.coerceIn(0, screenHeight - ballHeight)
-                    
                     windowManager?.updateViewLayout(floatingBallView, ballParams)
                 }
-                return true
             }
-            MotionEvent.ACTION_UP -> {
-                if (!isDragging) {
-                    // 点击事件：开启/关闭悬浮窗
-                    if (isExpanded) {
-                        hideConfigPopup()
-                    } else {
-                        showConfigPopup()
-                    }
-                } else {
-                    // 拖动结束，自动吸附到屏幕边缘
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                if (isDragging) {
                     snapToEdge()
+                    scheduleAutoCollapse()
                 }
-                return true
             }
         }
-        return false
+
+        if (::tapDetector.isInitialized) {
+            tapDetector.onTouchEvent(event)
+        }
+        if (event.action == MotionEvent.ACTION_UP || event.action == MotionEvent.ACTION_CANCEL) {
+            isDragging = false
+            dragExpandedFromPeek = false
+        }
+        return true
     }
-    
-    // 自动吸附到屏幕左右边缘
+
+    private fun disableTouchOnBallChildren(root: View?) {
+        if (root !is ViewGroup) return
+        for (i in 0 until root.childCount) {
+            val child = root.getChildAt(i)
+            child.isClickable = false
+            child.isFocusable = false
+            disableTouchOnBallChildren(child)
+        }
+    }
+
+    private fun handleBallTap() {
+        uiHandler.post {
+            try {
+                if (isBallCollapsed) {
+                    expandBall()
+                    return@post
+                }
+                if (isExpanded) {
+                    hideConfigPopup()
+                } else {
+                    showConfigPopup(resetTabToBoundGroup = true)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FloatingBallService", "处理点击失败", e)
+            }
+        }
+    }
+
     private fun snapToEdge() {
         val screenWidth = getScreenWidth()
         val screenHeight = getScreenHeight()
-        val ballWidth = 100
-        val ballHeight = 100
+        val ballWidth = currentBallWidth()
+        val ballHeight = currentBallHeight()
         val currentX = ballParams?.x ?: 0
         val currentY = ballParams?.y ?: 0
-        
-        // 只判断左右两边
-        val distanceToLeft = currentX
-        val distanceToRight = screenWidth - currentX - ballWidth
-        
-        if (distanceToLeft < distanceToRight) {
-            // 吸附到左边
-            ballParams?.x = 0
-            isOnLeftSide = true
-        } else {
-            // 吸附到右边
-            ballParams?.x = screenWidth - ballWidth
-            isOnLeftSide = false
-        }
-        
-        // 限制Y坐标在屏幕范围内
+
+        val centerX = currentX + ballWidth / 2
+        isOnLeftSide = centerX < screenWidth / 2
+
         ballParams?.y = currentY.coerceIn(0, screenHeight - ballHeight)
-        
-        windowManager?.updateViewLayout(floatingBallView, ballParams)
+        syncBallWindowLayout()
         android.util.Log.d("FloatingBallService", "悬浮球吸附到${if (isOnLeftSide) "左边" else "右边"}")
+    }
+
+    private fun initBallDimensions() {
+        expandedSizePx = dp(R.dimen.floating_ball_expanded_size)
+        touchWidthPx = dp(R.dimen.floating_ball_touch_width)
+        peekHeightPx = dp(R.dimen.floating_ball_peek_height)
+        peekDrawWidthPx = dp(R.dimen.floating_ball_peek_draw_width)
+    }
+
+    private fun dp(dimRes: Int): Int {
+        return resources.getDimensionPixelSize(dimRes)
+    }
+
+    private fun currentBallWidth(): Int =
+        if (isBallCollapsed) touchWidthPx else expandedSizePx
+
+    /** 收起态贴在屏幕边缘时的 X，保证贴边条完全在屏内 */
+    private fun collapsedBallX(screenWidth: Int): Int =
+        if (isOnLeftSide) 0 else screenWidth - touchWidthPx
+
+    private fun currentBallHeight(): Int =
+        if (isBallCollapsed) peekHeightPx else expandedSizePx
+
+    private fun scheduleAutoCollapse(delayMs: Long = autoCollapseDelayMs) {
+        uiHandler.removeCallbacks(autoCollapseRunnable)
+        if (isExpanded) return
+        uiHandler.postDelayed(autoCollapseRunnable, delayMs)
+    }
+
+    private fun cancelAutoCollapse() {
+        uiHandler.removeCallbacks(autoCollapseRunnable)
+    }
+
+    private fun collapseBall() {
+        if (isBallCollapsed) return
+        if (isExpanded) hideConfigPopup()
+
+        val params = ballParams ?: return
+        val view = floatingBallView ?: return
+        floatingBallView?.animate()?.cancel()
+        floatingBallView?.translationX = 0f
+        floatingBallView?.translationY = 0f
+
+        updatePeekAppearance()
+
+        val screenWidth = getScreenWidth()
+        val startW = expandedSizePx
+        val endW = touchWidthPx
+        val startH = expandedSizePx
+        val endH = peekHeightPx
+        val anchorY = params.y
+
+        isBallCollapsed = true
+        floatingBallView?.findViewById<FrameLayout>(R.id.ballExpanded)?.visibility = View.GONE
+        floatingBallView?.findViewById<FrameLayout>(R.id.ballCollapsed)?.visibility = View.VISIBLE
+
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 160
+            addUpdateListener { anim ->
+                val f = anim.animatedFraction
+                val w = (startW + (endW - startW) * f).toInt()
+                val h = (startH + (endH - startH) * f).toInt()
+                params.width = w
+                params.height = h
+                params.x = if (isOnLeftSide) 0 else screenWidth - w
+                params.y = anchorY.coerceIn(0, getScreenHeight() - h)
+                windowManager?.updateViewLayout(view, params)
+            }
+            start()
+        }
+    }
+
+    private fun expandBall() {
+        if (!isBallCollapsed) return
+        val params = ballParams ?: return
+        val view = floatingBallView ?: return
+        floatingBallView?.animate()?.cancel()
+        floatingBallView?.translationX = 0f
+        floatingBallView?.translationY = 0f
+
+        val screenWidth = getScreenWidth()
+        val startW = touchWidthPx
+        val endW = expandedSizePx
+        val startH = peekHeightPx
+        val endH = expandedSizePx
+        val anchorY = params.y
+
+        isBallCollapsed = false
+        floatingBallView?.findViewById<FrameLayout>(R.id.ballCollapsed)?.visibility = View.GONE
+        floatingBallView?.findViewById<FrameLayout>(R.id.ballExpanded)?.visibility = View.VISIBLE
+
+        ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 160
+            addUpdateListener { anim ->
+                val f = anim.animatedFraction
+                val w = (startW + (endW - startW) * f).toInt()
+                val h = (startH + (endH - startH) * f).toInt()
+                params.width = w
+                params.height = h
+                params.x = if (isOnLeftSide) 0 else screenWidth - w
+                params.y = anchorY.coerceIn(0, getScreenHeight() - h)
+                windowManager?.updateViewLayout(view, params)
+            }
+            start()
+        }
+        scheduleAutoCollapse()
+    }
+
+    private fun syncBallWindowLayout() {
+        val params = ballParams ?: return
+        val view = floatingBallView ?: return
+        val screenWidth = getScreenWidth()
+        if (isBallCollapsed) {
+            params.width = touchWidthPx
+            params.height = peekHeightPx
+            params.x = collapsedBallX(screenWidth)
+        } else {
+            params.width = expandedSizePx
+            params.height = expandedSizePx
+            params.x = if (isOnLeftSide) 0 else screenWidth - expandedSizePx
+        }
+        params.y = params.y.coerceIn(0, getScreenHeight() - params.height)
+        try {
+            windowManager?.updateViewLayout(view, params)
+        } catch (e: Exception) {
+            android.util.Log.e("FloatingBallService", "更新悬浮球布局失败", e)
+        }
+    }
+
+    private fun bringBallToFront() {
+        val view = floatingBallView ?: return
+        val params = ballParams ?: return
+        try {
+            windowManager?.removeView(view)
+            windowManager?.addView(view, params)
+        } catch (e: Exception) {
+            android.util.Log.e("FloatingBallService", "置顶悬浮球失败", e)
+        }
     }
     
     // 获取屏幕宽度
@@ -338,14 +561,30 @@ class FloatingBallService : Service() {
         return displayMetrics.heightPixels
     }
     
-    // 更新悬浮球外观
-    private fun updateFloatingBallAppearance() {
-        val ballIcon = floatingBallView?.findViewById<ImageView>(R.id.ballIcon)
-        val ballText = floatingBallView?.findViewById<TextView>(R.id.ballText)
-        
-        // 悬浮球始终显示完整图标，隐藏文字
-        ballIcon?.setImageResource(R.drawable.ic_floating_ball)
-        ballText?.visibility = View.GONE
+    private fun updatePeekAppearance() {
+        val peekCap = floatingBallView?.findViewById<FrameLayout>(R.id.peekCap) ?: return
+        val chevron = floatingBallView?.findViewById<ImageView>(R.id.collapseChevron)
+        val capLp = peekCap.layoutParams as? FrameLayout.LayoutParams ?: return
+        if (isOnLeftSide) {
+            capLp.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            peekCap.setBackgroundResource(R.drawable.floating_ball_peek_cap_left)
+            chevron?.setImageResource(R.drawable.ic_chevron_expand_right)
+        } else {
+            capLp.gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            peekCap.setBackgroundResource(R.drawable.floating_ball_peek_cap_right)
+            chevron?.setImageResource(R.drawable.ic_chevron_expand_left)
+        }
+        peekCap.layoutParams = capLp
+    }
+
+    private fun isTouchOnBall(rawX: Float, rawY: Float): Boolean {
+        val x = ballParams?.x ?: return false
+        val y = ballParams?.y ?: return false
+        val w = currentBallWidth()
+        val h = currentBallHeight()
+        val tx = rawX.toInt()
+        val ty = rawY.toInt()
+        return tx in x..(x + w) && ty in y..(y + h)
     }
 
     /**
@@ -355,11 +594,11 @@ class FloatingBallService : Service() {
         val checkRunnable = object : Runnable {
             override fun run() {
                 try {
-                    if (isLauncherInForeground()) {
+                    if (shouldAutoHideFloatingBall()) {
                         if (launcherStableSince == 0L) launcherStableSince = System.currentTimeMillis()
                         val stable = System.currentTimeMillis() - launcherStableSince >= 2500L
                         if (stable) {
-                            android.util.Log.d("FloatingBallService", "检测到桌面稳定在前台，自动关闭悬浮球")
+                            android.util.Log.d("FloatingBallService", "应隐藏悬浮球（桌面或本应用）")
                             destroyFloatingBall()
                             return
                         }
@@ -377,70 +616,88 @@ class FloatingBallService : Service() {
         homeCheckHandler.postDelayed(checkRunnable, homeCheckIntervalMs)
     }
 
-    /**
-     * 判断当前前台是否为桌面/启动器
-     */
-    private fun isLauncherInForeground(): Boolean {
-        val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val endTime = System.currentTimeMillis()
-        val startTime = endTime - 5000
-        val events = usageStatsManager.queryEvents(startTime, endTime)
-        val event = UsageEvents.Event()
-        var lastForegroundPackage: String? = null
-        while (events.hasNextEvent()) {
-            events.getNextEvent(event)
-            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                lastForegroundPackage = event.packageName
+    private fun shouldAutoHideFloatingBall(): Boolean {
+        if (AppStateUtil.isInAppActive(applicationContext)) return true
+        val foreground = ForegroundAppUtil.getRecentForegroundPackage(this) ?: return false
+        if (foreground == applicationContext.packageName) return true
+        val boundPkg = currentGroup?.boundPackageName
+        if (!boundPkg.isNullOrBlank() && foreground == boundPkg) return false
+        if (foreground == "com.android.systemui") return false
+        return LauncherUtil.isLauncherPackage(foreground)
+    }
+
+    companion object {
+        const val EXTRA_PACKAGE_NAME = "packageName"
+        const val EXTRA_FORCE_SHOW = "forceShow"
+    }
+
+    private fun themedInflater(): LayoutInflater {
+        val themed = ContextThemeWrapper(applicationContext, R.style.Theme_ImageOverlay)
+        return LayoutInflater.from(themed)
+    }
+
+    private fun styleConfigPopupTabs(tabLayout: TabLayout) {
+        tabLayout.setBackgroundColor(Color.TRANSPARENT)
+        tabLayout.setSelectedTabIndicatorColor(Color.WHITE)
+        tabLayout.setTabTextColors(
+            Color.parseColor("#99FFFFFF"),
+            Color.WHITE
+        )
+        tabLayout.tabRippleColor = ColorStateList.valueOf(Color.TRANSPARENT)
+        tabLayout.post {
+            for (i in 0 until tabLayout.tabCount) {
+                tabLayout.getTabAt(i)?.view?.setBackgroundColor(Color.TRANSPARENT)
             }
         }
-        val pkg = lastForegroundPackage ?: return false
-        // 排除 SystemUI，避免误判锁屏、通知下拉等
-        if (pkg == "com.android.systemui") return false
-        return launcherPackages.contains(pkg) || pkg.contains("launcher") || pkg.contains("home")
     }
-    
-    // 显示配置弹窗
-    private fun showConfigPopup() {
+
+    private fun showConfigPopup(resetTabToBoundGroup: Boolean = false) {
         try {
-            if (configPopupView != null) {
-                hideConfigPopup()
+            if (windowManager == null) {
+                windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             }
-            
-            val inflater = LayoutInflater.from(this)
+            val previousScreenType = popupScreenType
+            hideConfigPopup()
+
+            if (resetTabToBoundGroup) {
+                popupScreenType = currentGroup?.screenType ?: "main"
+            } else {
+                popupScreenType = previousScreenType
+            }
+
+            val inflater = themedInflater()
             configPopupView = inflater.inflate(R.layout.config_popup, null)
-            
+
             val configList = configPopupView?.findViewById<LinearLayout>(R.id.configList)
             val groupTitle = configPopupView?.findViewById<TextView>(R.id.groupTitle)
-            
-            // 设置组标题
-            groupTitle?.text = currentGroup?.groupName ?: "配置组"
-            
-            // 清空现有配置项
-            configList?.removeAllViews()
-            
-            // 添加配置项
-            currentGroup?.configs?.forEach { config ->
-                val configItem = inflater.inflate(R.layout.config_popup_item, null)
-                val configName = configItem.findViewById<TextView>(R.id.configName)
-                val configStatus = configItem.findViewById<TextView>(R.id.configStatus)
-                
-                configName.text = config.configName
-                configStatus.text = if (config.active) "已激活" else "未激活"
-                configStatus.setTextColor(
-                    if (config.active) 
-                        getColor(android.R.color.holo_green_dark)
-                    else 
-                        getColor(android.R.color.darker_gray)
-                )
-                
-                // 设置点击事件
-                configItem.setOnClickListener {
-                    toggleConfig(config)
-                }
-                
-                configList?.addView(configItem)
+            val tabLayout = configPopupView?.findViewById<TabLayout>(R.id.tabLayout)
+
+            val hasSecondary = DisplayUtil.hasSecondaryDisplay(this)
+
+            if (hasSecondary && tabLayout != null) {
+                styleConfigPopupTabs(tabLayout)
+                tabLayout.visibility = View.VISIBLE
+                tabLayout.clearOnTabSelectedListeners()
+                tabLayout.removeAllTabs()
+                tabLayout.addTab(tabLayout.newTab().setText("主屏"))
+                tabLayout.addTab(tabLayout.newTab().setText("副屏"))
+                tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+                    override fun onTabSelected(tab: TabLayout.Tab?) {
+                        popupScreenType = if (tab?.position == 1) "secondary" else "main"
+                        refreshConfigPopupList(configList, groupTitle, inflater)
+                    }
+                    override fun onTabUnselected(tab: TabLayout.Tab?) {}
+                    override fun onTabReselected(tab: TabLayout.Tab?) {}
+                })
+                val tabIndex = if (popupScreenType == "secondary") 1 else 0
+                tabLayout.getTabAt(tabIndex)?.select()
+                styleConfigPopupTabs(tabLayout)
+            } else {
+                tabLayout?.visibility = View.GONE
             }
-            
+
+            refreshConfigPopupList(configList, groupTitle, inflater)
+
             // 设置手动销毁按钮点击事件
             val manualDestroyView = configPopupView?.findViewById<TextView>(R.id.manualDestroy)
             manualDestroyView?.setOnClickListener {
@@ -452,19 +709,17 @@ class FloatingBallService : Service() {
             
             // 设置弹窗参数（固定尺寸和位置）
             popupParams = WindowManager.LayoutParams(
-                (getScreenWidth() * 0.6).toInt(), // 屏幕宽度的60%
-                (getScreenHeight() * 0.6).toInt(), // 屏幕高度的60%
+                (getScreenWidth() * 0.6).toInt(),
+                (getScreenHeight() * 0.6).toInt(),
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
                 else
                     WindowManager.LayoutParams.TYPE_PHONE,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
                 PixelFormat.TRANSLUCENT
             )
-            
-            // 设置弹窗位置（屏幕正中间）
+
             popupParams?.gravity = Gravity.CENTER
             popupParams?.x = 0
             popupParams?.y = 0
@@ -488,117 +743,157 @@ class FloatingBallService : Service() {
             
             overlayView?.setOnTouchListener { _, event ->
                 if (event.action == MotionEvent.ACTION_DOWN) {
-                    // 检查点击位置是否在悬浮球区域
-                    val ballX = ballParams?.x ?: 0
-                    val ballY = ballParams?.y ?: 0
-                    val ballWidth = 100
-                    val ballHeight = 100
-                    
-                    val touchX = event.rawX.toInt()
-                    val touchY = event.rawY.toInt()
-                    
-                    // 如果点击在悬浮球区域，不关闭悬浮窗
-                    if (touchX >= ballX && touchX <= ballX + ballWidth &&
-                        touchY >= ballY && touchY <= ballY + ballHeight) {
-                        return@setOnTouchListener false
-                    }
-                    
-                    // 点击外部区域，关闭悬浮窗
                     hideConfigPopup()
                 }
-                true
+                false
             }
-            
-             // 先添加覆盖层（底层），再添加悬浮窗（上层），最后添加悬浮球（最上层）
-             windowManager?.addView(overlayView, overlayParams)
-             windowManager?.addView(configPopupView, popupParams)
-             
-             // 重新添加悬浮球到最上层，确保可以点击
-             if (floatingBallView != null && ballParams != null) {
-                 try {
-                     windowManager?.removeView(floatingBallView)
-                     windowManager?.addView(floatingBallView, ballParams)
-                 } catch (e: Exception) {
-                     android.util.Log.e("FloatingBallService", "重新添加悬浮球失败", e)
-                 }
-             }
+
+            windowManager?.addView(overlayView, overlayParams)
+            windowManager?.addView(configPopupView, popupParams)
             isExpanded = true
-            
+            cancelAutoCollapse()
+            bringBallToFront()
+
+            android.util.Log.d("FloatingBallService", "配置弹窗已添加")
+
             android.util.Log.d("FloatingBallService", "配置弹窗显示成功")
         } catch (e: Exception) {
             android.util.Log.e("FloatingBallService", "显示配置弹窗失败", e)
         }
     }
     
-    // 隐藏配置弹窗
-    private fun hideConfigPopup() {
-        try {
-            if (configPopupView != null && windowManager != null) {
-                windowManager?.removeView(configPopupView)
-                configPopupView = null
-                isExpanded = false
-                
-                // 移除覆盖层
-                try {
-                    if (overlayView != null && windowManager != null) {
-                        windowManager?.removeView(overlayView)
-                        overlayView = null
-                    }
-                } catch (e: Exception) {
-                    // 忽略覆盖层移除错误
-                }
-                
-                android.util.Log.d("FloatingBallService", "配置弹窗隐藏成功")
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("FloatingBallService", "隐藏配置弹窗失败", e)
+    private fun refreshConfigPopupList(
+        configList: LinearLayout?,
+        groupTitle: TextView?,
+        inflater: LayoutInflater
+    ) {
+        configList?.removeAllViews()
+        val groups = ConfigRepository.getGroupsByScreenType(popupScreenType)
+            .filter { it.groupName != "默认配置" }
+
+        if (groups.isEmpty()) {
+            groupTitle?.text = if (popupScreenType == "secondary") "副屏（无配置组）" else "主屏（无配置组）"
+            return
         }
+
+        if (groups.size == 1) {
+            groupTitle?.text = groups[0].groupName
+        } else {
+            groupTitle?.text = if (popupScreenType == "secondary") "副屏配置" else "主屏配置"
+        }
+
+        for (group in groups) {
+            if (groups.size > 1) {
+                val header = TextView(this).apply {
+                    text = group.groupName
+                    textSize = 14f
+                    setTextColor(ContextCompat.getColor(this@FloatingBallService, android.R.color.white))
+                    setPadding(0, 12, 0, 4)
+                }
+                configList?.addView(header)
+            }
+
+            if (group.configs.isEmpty()) {
+                val empty = TextView(this).apply {
+                    text = "（无配置）"
+                    textSize = 12f
+                    setTextColor(ContextCompat.getColor(this@FloatingBallService, android.R.color.darker_gray))
+                    setPadding(0, 0, 0, 8)
+                }
+                configList?.addView(empty)
+                continue
+            }
+
+            for (config in group.configs) {
+                val configItem = inflater.inflate(R.layout.config_popup_item, null)
+                val configName = configItem.findViewById<TextView>(R.id.configName)
+                val configStatus = configItem.findViewById<TextView>(R.id.configStatus)
+
+                configName.text = config.configName
+                val activeOnThisScreen = config.active && group.screenType == popupScreenType
+                configStatus.text = if (activeOnThisScreen) "已激活" else "未激活"
+                configStatus.setTextColor(
+                    if (activeOnThisScreen)
+                        ContextCompat.getColor(this@FloatingBallService, android.R.color.holo_green_dark)
+                    else
+                        ContextCompat.getColor(this@FloatingBallService, android.R.color.darker_gray)
+                )
+
+                configItem.setOnClickListener {
+                    toggleConfig(group, config)
+                }
+                configList?.addView(configItem)
+            }
+        }
+    }
+
+    private fun hideConfigPopup() {
+        isExpanded = false
+        try {
+            if (configPopupView != null) {
+                windowManager?.removeView(configPopupView)
+            }
+        } catch (_: Exception) {
+        }
+        configPopupView = null
+        try {
+            if (overlayView != null) {
+                windowManager?.removeView(overlayView)
+            }
+        } catch (_: Exception) {
+        }
+        overlayView = null
+        bringBallToFront()
+        scheduleAutoCollapse(2500L)
+        android.util.Log.d("FloatingBallService", "配置弹窗已关闭")
     }
     
     // 切换配置
-    private fun toggleConfig(config: Config) {
+    private fun toggleConfig(group: Group, config: Config) {
         try {
-            // 标记手动操作
             ConfigRepository.markManualOperation()
-            
-            // 获取当前组名
-            val groupName = currentGroup?.groupName ?: return
-            
-            if (config.active) {
-                // 关闭当前配置
+
+            val groupId = group.id
+            val screenType = group.screenType
+            val activeOnThisScreen = config.active &&
+                ConfigRepository.isOverlayRunningForScreenType(this, screenType) &&
+                group.configs.any { it.configName == config.configName && it.active }
+
+            if (activeOnThisScreen) {
                 config.active = false
-                val stopIntent = Intent(this, OverlayService::class.java)
-                stopService(stopIntent)
-                android.util.Log.d("FloatingBallService", "关闭配置: ${config.configName}")
+                ConfigRepository.setDefaultActive(this, false, screenType)
+                OverlayService.stopDisplay(
+                    this,
+                    ConfigRepository.displayKeyForScreenType(this, screenType)
+                )
+                ConfigRepository.save(this)
+                android.util.Log.d("FloatingBallService", "关闭配置: ${group.groupName}/${config.configName}")
             } else {
-                // 设置为全局默认配置和组默认配置
-                ConfigRepository.switchDefaultConfig(this, groupName, config)
-                android.util.Log.d("FloatingBallService", "设置配置为默认: ${config.configName}")
-                
-                // 根据自动开启开关决定是否启动遮罩
+                ConfigRepository.switchDefaultConfig(this, groupId, config)
+                android.util.Log.d("FloatingBallService", "设置配置: ${group.groupName}/${config.configName}")
+
                 if (ConfigRepository.isAutoStartOverlayEnabled(this)) {
-                    // 自动开启开关开启，启动遮罩
-                    val startIntent = Intent(this, OverlayService::class.java)
-                    startIntent.putExtra("imageUri", config.imageUri)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        startForegroundService(startIntent)
-                    } else {
-                        startService(startIntent)
-                    }
-                    android.util.Log.d("FloatingBallService", "启动配置: ${config.configName}")
-                } else {
-                    // 自动开启开关关闭，只设置配置不启动遮罩
-                    android.util.Log.d("FloatingBallService", "自动开启开关关闭，只设置配置不启动遮罩")
+                    OverlayToggler.turnOnOverlayForScreenType(this, screenType)
                 }
             }
-            
-            // 刷新弹窗显示
-            hideConfigPopup()
-            showConfigPopup()
-            
+
+            refreshConfigPopupInPlace()
+            scheduleAutoCollapse(4000L)
         } catch (e: Exception) {
             android.util.Log.e("FloatingBallService", "切换配置失败", e)
         }
     }
-    
+
+    private fun refreshConfigPopupInPlace() {
+        val view = configPopupView ?: return
+        val configList = view.findViewById<LinearLayout>(R.id.configList)
+        val groupTitle = view.findViewById<TextView>(R.id.groupTitle)
+        refreshConfigPopupList(configList, groupTitle, themedInflater())
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        uiHandler.removeCallbacks(autoCollapseRunnable)
+        super.onTaskRemoved(rootIntent)
+    }
 }
+

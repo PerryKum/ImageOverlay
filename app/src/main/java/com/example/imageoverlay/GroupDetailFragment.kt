@@ -2,7 +2,9 @@ package com.example.imageoverlay
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.Context
 import android.content.Intent
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -31,6 +33,7 @@ import java.io.InputStream
 
 class GroupDetailFragment : Fragment() {
     private var groupName: String? = null
+    private var groupId: String = ""
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: ConfigAdapter
     private lateinit var tvGroupTitle: TextView
@@ -44,6 +47,7 @@ class GroupDetailFragment : Fragment() {
         super.onCreate(savedInstanceState)
         val group = arguments?.getSerializable("group") as? Group
         groupName = group?.groupName
+        groupId = group?.id ?: ""
     }
 
     override fun onCreateView(
@@ -89,9 +93,7 @@ class GroupDetailFragment : Fragment() {
     }
 
     private fun getCurrentGroup(): Group? {
-        return groupName?.let { name ->
-            ConfigRepository.getGroups().find { it.groupName == name }
-        }
+        return ConfigRepository.findGroupById(groupId)
     }
 
     private fun refreshConfigList() {
@@ -282,23 +284,20 @@ class GroupDetailFragment : Fragment() {
                 return
             }
             
-            // 操作前先检查并同步状态
-            val currentServiceRunning = isOverlayServiceRunning()
-            val hasActiveConfig = ConfigRepository.getGroups().any { group ->
-                group.configs.any { it.active }
-            }
-            
-            // 如果状态不一致，先同步
-            if (hasActiveConfig != currentServiceRunning) {
-                android.util.Log.w("GroupDetailFragment", "操作前检测到状态不同步，先同步: 有激活配置=$hasActiveConfig, 服务状态=$currentServiceRunning")
-                
-                if (hasActiveConfig && !currentServiceRunning) {
-                    // 有激活配置但服务未运行 - 清理所有激活状态
-                    ConfigRepository.getGroups().forEach { group ->
-                        group.configs.forEach { config ->
-                            config.active = false
-                        }
-                    }
+            // 操作前先检查并同步状态（只检查同屏类型）
+            val currentScreenType = getCurrentGroup()?.screenType ?: "main"
+            val displayKey = ConfigRepository.displayKeyForScreenType(requireContext(), currentScreenType)
+            val overlayOnThisScreen = ConfigRepository.isOverlayRunningForScreenType(requireContext(), currentScreenType)
+            val hasActiveConfig = ConfigRepository.getGroups()
+                .filter { it.screenType == currentScreenType }
+                .any { group -> group.configs.any { it.active } }
+
+            if (hasActiveConfig != overlayOnThisScreen) {
+                android.util.Log.w("GroupDetailFragment", "操作前检测到状态不同步: 有激活配置=$hasActiveConfig, 本屏遮罩=$overlayOnThisScreen display=$displayKey")
+
+                if (hasActiveConfig && !overlayOnThisScreen) {
+                    // 有激活配置但服务未运行 - 清理同屏激活状态
+                    ConfigRepository.clearActiveConfigsForScreenType(currentScreenType)
                     ConfigRepository.save(requireContext())
                     
                     android.widget.Toast.makeText(requireContext(), "状态已同步，请重新操作", android.widget.Toast.LENGTH_SHORT).show()
@@ -314,17 +313,20 @@ class GroupDetailFragment : Fragment() {
                 // 1. 先切换默认遮罩配置（独立逻辑）
                 val currentGroup = getCurrentGroup()
                 if (currentGroup != null) {
-                    ConfigRepository.switchDefaultConfig(requireContext(), currentGroup.groupName, config)
+                    ConfigRepository.switchDefaultConfig(requireContext(), groupId, config)
                     android.util.Log.d("GroupDetailFragment", "手动切换时同步状态: ${currentGroup.groupName}/${config.configName}")
                 }
                 
-                // 先关闭所有遮罩
-                val stopIntent = Intent(requireContext(), OverlayService::class.java)
-                requireContext().stopService(stopIntent)
-                // 再启动遮罩
                 if (PermissionUtil.checkOverlayPermission(requireContext())) {
+                    ConfigRepository.setDefaultActive(requireContext(), true, currentScreenType)
                     val intent = Intent(requireContext(), OverlayService::class.java)
                     intent.putExtra("imageUri", config.imageUri)
+                    if (currentScreenType == "secondary") {
+                        val displayId = getSecondaryDisplayId(requireContext())
+                        if (displayId != -1) {
+                            intent.putExtra(OverlayService.EXTRA_DISPLAY_ID, displayId)
+                        }
+                    }
                     // 不传递透明度参数，让OverlayService使用全局透明度设置
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                         requireContext().startForegroundService(intent)
@@ -337,10 +339,9 @@ class GroupDetailFragment : Fragment() {
                     android.widget.Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", android.widget.Toast.LENGTH_LONG).show()
                 }
             } else {
-                // 变红并关闭遮罩
                 config.active = false
-                val intent = Intent(requireContext(), OverlayService::class.java)
-                requireContext().stopService(intent)
+                ConfigRepository.setDefaultActive(requireContext(), false, currentScreenType)
+                OverlayService.stopDisplay(requireContext(), displayKey)
             }
             
             ConfigRepository.save(requireContext())
@@ -385,7 +386,7 @@ class GroupDetailFragment : Fragment() {
             return
         }
         // 设置为组的默认遮罩
-        com.example.imageoverlay.model.ConfigRepository.setGroupDefaultConfig(groupName ?: "", cfg.configName)
+        com.example.imageoverlay.model.ConfigRepository.setGroupDefaultConfig(groupId, cfg.configName)
         com.example.imageoverlay.model.ConfigRepository.save(requireContext())
         
         // 刷新界面
@@ -415,8 +416,12 @@ class GroupDetailFragment : Fragment() {
                 try {
                     // 如果该配置正在运行，先停止遮罩服务
                     if (config.active) {
-                        val stopIntent = android.content.Intent(requireContext(), OverlayService::class.java)
-                        requireContext().stopService(stopIntent)
+                        val screenType = currentGroup.screenType
+                        OverlayService.stopDisplay(
+                            requireContext(),
+                            ConfigRepository.displayKeyForScreenType(requireContext(), screenType)
+                        )
+                        ConfigRepository.setDefaultActive(requireContext(), false, screenType)
                         config.active = false
                     }
                     
@@ -470,24 +475,9 @@ class GroupDetailFragment : Fragment() {
     /**
      * 检查遮罩服务是否正在运行
      */
-    private fun isOverlayServiceRunning(): Boolean {
-        // 检查前台服务通知
-        val notificationManager = requireContext().getSystemService(android.content.Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
-        val activeNotifications = notificationManager.activeNotifications
-        val hasOverlayNotification = activeNotifications.any { notification ->
-            notification.id == 1
-        }
-        
-        if (hasOverlayNotification) {
-            return true
-        }
-        
-        // 检查ActivityManager中的服务状态
-        val activityManager = requireContext().getSystemService(android.content.Context.ACTIVITY_SERVICE) as android.app.ActivityManager
-        val runningServices = activityManager.getRunningServices(Integer.MAX_VALUE)
-        return runningServices.any { service ->
-            service.service.className == "com.example.imageoverlay.OverlayService"
-        }
+    private fun isOverlayRunningOnCurrentScreen(): Boolean {
+        val screenType = getCurrentGroup()?.screenType ?: "main"
+        return ConfigRepository.isOverlayRunningForScreenType(requireContext(), screenType)
     }
     
     /**
@@ -495,28 +485,15 @@ class GroupDetailFragment : Fragment() {
      */
     private fun forceSyncPresetState() {
         try {
-            val currentServiceRunning = isOverlayServiceRunning()
-            val hasActiveConfig = ConfigRepository.getGroups().any { group ->
-                group.configs.any { it.active }
-            }
-            
-            android.util.Log.d("GroupDetailFragment", "forceSyncPresetState: 服务状态=$currentServiceRunning, 有激活配置=$hasActiveConfig")
-            
-            if (hasActiveConfig && !currentServiceRunning) {
-                // 有激活配置但服务未运行 - 清理状态
-                android.util.Log.w("GroupDetailFragment", "检测到预设遮罩状态不同步，清理无效状态")
-                
-                ConfigRepository.getGroups().forEach { group ->
-                    group.configs.forEach { config ->
-                        if (config.active) {
-                            android.util.Log.w("GroupDetailFragment", "清理组配置激活状态: ${group.groupName}/${config.configName}")
-                            config.active = false
-                        }
-                    }
-                }
-                ConfigRepository.save(requireContext())
-                
-                // 刷新界面
+            val currentScreenType = getCurrentGroup()?.screenType ?: "main"
+            val hadStale = ConfigRepository.getGroupsByScreenType(currentScreenType)
+                .any { group -> group.configs.any { it.active } }
+            val presetStillRunning = ConfigRepository.syncPresetStateForScreenType(
+                requireContext(),
+                currentScreenType
+            )
+
+            if (hadStale && !presetStillRunning) {
                 refreshConfigList()
                 adapter = ConfigAdapter(requireContext(), configList, { idx ->
                     onConfigStatusClick(idx)
@@ -526,23 +503,28 @@ class GroupDetailFragment : Fragment() {
                     showConfigContextMenu(idx)
                 }, getCurrentGroup()?.defaultConfigName)
                 recyclerView.adapter = adapter
-                
-                android.widget.Toast.makeText(requireContext(), "检测到预设遮罩已停止，状态已同步", android.widget.Toast.LENGTH_SHORT).show()
-            } else if (!hasActiveConfig && currentServiceRunning) {
-                // 没有激活配置但服务在运行 - 同步状态
-                android.util.Log.w("GroupDetailFragment", "检测到预设遮罩正在运行，同步状态")
-                
-                // 找到当前运行的配置并激活
-                val currentGroup = getCurrentGroup()
-                if (currentGroup != null) {
-                    // 这里可以根据需要设置当前组为激活状态
-                    // 或者保持现状，因为服务可能是在其他Fragment中启动的
-                }
-                
-                android.widget.Toast.makeText(requireContext(), "检测到预设遮罩正在运行，状态已同步", android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast.makeText(
+                    requireContext(),
+                    "检测到预设遮罩已停止，状态已同步",
+                    android.widget.Toast.LENGTH_SHORT
+                ).show()
             }
         } catch (e: Exception) {
             android.util.Log.e("GroupDetailFragment", "forceSyncPresetState异常", e)
+        }
+    }
+
+    private fun getSecondaryDisplayId(context: Context): Int {
+        return try {
+            val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager ?: return -1
+            val displays = dm.displays
+            if (displays.size > 1) {
+                displays[1].displayId
+            } else {
+                -1
+            }
+        } catch (e: Exception) {
+            -1
         }
     }
 

@@ -4,11 +4,14 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.graphics.PixelFormat
+import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.os.Build
 import android.os.IBinder
+import android.view.Display
 import android.view.WindowManager
 import android.widget.ImageView
 import androidx.core.app.NotificationCompat
@@ -16,173 +19,143 @@ import pl.droidsonroids.gif.GifImageView
 import pl.droidsonroids.gif.GifDrawable
 import java.io.InputStream
 import com.bumptech.glide.Glide
-import com.bumptech.glide.load.resource.gif.GifDrawable as GlideGifDrawable
 
 class OverlayService : Service() {
-    private var windowManager: WindowManager? = null
-    private var imageView: ImageView? = null
-    private var currentImageUri: String? = null
-    private var currentOpacity: Int = 100
+
+    private data class DisplayOverlay(
+        var windowManager: WindowManager,
+        var imageView: ImageView?,
+        var imageUri: String?,
+        var opacity: Int
+    )
+
+    private val overlays = mutableMapOf<Int, DisplayOverlay>()
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
-            // 立即创建前台服务通知，避免超时
-            createNotificationChannel()
-            val notification: Notification = NotificationCompat.Builder(this, "overlay_channel")
-                .setContentTitle("遮罩服务")
-                .setContentText("正在启动遮罩...")
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setPriority(NotificationCompat.PRIORITY_LOW)
-                .setOngoing(true)
-                .setAutoCancel(false)
-                .build()
-            startForeground(1, notification)
-            
-            // 检查是否是透明度更新请求
+            ensureForeground()
+
+            when (intent?.action) {
+                ACTION_STOP_DISPLAY -> {
+                    val key = displayKeyFromIntentExtra(intent.getIntExtra(EXTRA_DISPLAY_ID, -1))
+                    removeOverlayForDisplay(key)
+                    if (overlays.isEmpty()) stopSelf()
+                    return if (overlays.isEmpty()) START_NOT_STICKY else START_STICKY
+                }
+                ACTION_STOP_ALL -> {
+                    removeAllOverlays()
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+            }
+
             val opacityValue = intent?.getIntExtra("updateOpacity", -1) ?: -1
             if (opacityValue != -1) {
-                // 更新透明度
                 updateOpacity(opacityValue)
                 return START_STICKY
             }
-            
+
             val newImageUri = intent?.getStringExtra("imageUri")
+            val displayId = intent?.getIntExtra(EXTRA_DISPLAY_ID, -1) ?: -1
+            val displayKey = displayKeyFromIntentExtra(displayId)
+
             if (newImageUri.isNullOrBlank()) {
                 android.util.Log.w("OverlayService", "图片URI为空，停止服务")
+                removeAllOverlays()
                 stopSelf()
                 return START_NOT_STICKY
             }
-            
-            // 如果没有传递透明度参数，使用全局透明度设置
+
             val newOpacity = when (val opacity = intent?.getIntExtra("opacity", -1) ?: -1) {
                 -1 -> com.example.imageoverlay.model.ConfigRepository.getDefaultOpacity(this)
                 else -> opacity
             }
-            
-            // 检查是否是相同的图片URI和透明度，如果是则不重复处理
-            if (newImageUri == currentImageUri && newOpacity == currentOpacity && imageView != null) {
-                android.util.Log.d("OverlayService", "相同图片URI和透明度，跳过处理")
+
+            val existing = overlays[displayKey]
+            if (newImageUri == existing?.imageUri && newOpacity == existing.opacity && existing.imageView != null) {
+                android.util.Log.d("OverlayService", "display=$displayKey 相同图片与透明度，跳过")
                 return START_STICKY
             }
-            
-            android.util.Log.d("OverlayService", "开始处理新遮罩: $newImageUri, 透明度: $newOpacity")
-            
-            // 先清理之前的遮罩
-            removeOverlay()
-            
+
+            android.util.Log.d("OverlayService", "display=$displayKey 显示遮罩: $newImageUri")
+
+            removeOverlayForDisplay(displayKey)
+
             val imageUri = try {
                 Uri.parse(newImageUri)
             } catch (e: Exception) {
                 android.util.Log.e("OverlayService", "解析图片URI失败: $newImageUri", e)
-                stopSelf()
+                if (overlays.isEmpty()) stopSelf()
                 return START_NOT_STICKY
             }
-            
-            if (imageUri != null) {
-                currentImageUri = newImageUri
-                currentOpacity = newOpacity
-                val success = showOverlay(imageUri, newOpacity)
-                if (success) {
-                    android.util.Log.d("OverlayService", "遮罩显示成功")
-                    // 广播状态：已启动
-                    try {
-                        val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
-                        stateIntent.putExtra("active", true)
-                        sendBroadcast(stateIntent)
-                    } catch (_: Exception) {}
-                } else {
-                    android.util.Log.e("OverlayService", "遮罩显示失败，停止服务")
-                    stopSelf()
-                    return START_NOT_STICKY
-                }
+
+            val success = showOverlay(displayKey, displayId, imageUri, newOpacity)
+            if (success) {
+                overlays[displayKey]?.imageUri = newImageUri
+                overlays[displayKey]?.opacity = newOpacity
+                activeDisplayKeys.add(displayKey)
+                broadcastOverlayState(true)
             } else {
-                android.util.Log.e("OverlayService", "imageUri为null，停止服务")
-                stopSelf()
+                if (overlays.isEmpty()) stopSelf()
                 return START_NOT_STICKY
             }
-            
-            // 更新前台服务通知内容
-            val successNotification: Notification = NotificationCompat.Builder(this, "overlay_channel")
-                .setContentTitle("遮罩已启动")
-                .setContentText("点击返回应用")
-                .setSmallIcon(R.mipmap.ic_launcher)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setOngoing(true)
-                .setAutoCancel(false)
-                .build()
-            startForeground(1, successNotification)
-            
-            android.util.Log.d("OverlayService", "前台服务已启动")
+
+            ensureForeground("遮罩已启动")
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "onStartCommand异常", e)
-            // 出现异常时停止服务，避免无限重启
+            removeAllOverlays()
             stopSelf()
             return START_NOT_STICKY
         }
         return START_STICKY
     }
 
-    private fun showOverlay(imageUri: Uri, opacity: Int): Boolean {
+    private fun ensureForeground(contentText: String = "正在运行遮罩...") {
+        createNotificationChannel()
+        val notification = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("遮罩服务")
+            .setContentText(contentText)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .build()
+        startForeground(NOTIFICATION_ID, notification)
+    }
+
+    private fun showOverlay(displayKey: Int, displayId: Int, imageUri: Uri, opacity: Int): Boolean {
         return try {
-            windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-            
-            // 检查文件类型，决定使用哪种ImageView
+            val windowManager = windowManagerForDisplay(displayId) ?: return false
+
             val mimeType = contentResolver.getType(imageUri)
             val isGif = mimeType == "image/gif" || imageUri.toString().lowercase().endsWith(".gif")
-            android.util.Log.d("OverlayService", "文件类型检测: mimeType=$mimeType, isGif=$isGif, uri=$imageUri")
-            
-            if (isGif) {
-                // 使用GifImageView支持GIF动画
+
+            val imageView: ImageView = if (isGif) {
                 try {
                     val inputStream: InputStream? = contentResolver.openInputStream(imageUri)
                     if (inputStream != null) {
                         val gifDrawable = GifDrawable(inputStream)
-                        imageView = GifImageView(this)
-                        (imageView as GifImageView).setImageDrawable(gifDrawable)
-                        // 确保GIF动画开始播放
+                        val gifView = GifImageView(this)
+                        gifView.setImageDrawable(gifDrawable)
                         gifDrawable.start()
                         inputStream.close()
-                        android.util.Log.d("OverlayService", "GIF加载成功并开始播放: $imageUri")
-                    } else {
-                        android.util.Log.e("OverlayService", "无法打开GIF文件: $imageUri")
-                        return false
-                    }
+                        gifView
+                    } else return false
                 } catch (e: Exception) {
-                    android.util.Log.e("OverlayService", "加载GIF失败，尝试备用方案: $imageUri", e)
-                    // 备用方案：使用标准ImageView + Glide
-                    try {
-                        imageView = ImageView(this)
-                        Glide.with(this)
-                            .asGif()
-                            .load(imageUri)
-                            .into(imageView as ImageView)
-                        android.util.Log.d("OverlayService", "使用Glide加载GIF成功: $imageUri")
-                    } catch (e2: Exception) {
-                        android.util.Log.e("OverlayService", "Glide加载GIF也失败: $imageUri", e2)
-                        return false
-                    }
+                    android.util.Log.e("OverlayService", "加载GIF失败: $imageUri", e)
+                    val fallback = ImageView(this)
+                    Glide.with(this).asGif().load(imageUri).into(fallback)
+                    fallback
                 }
             } else {
-                // 使用标准ImageView支持PNG等静态图片
-                imageView = ImageView(this)
-                try {
-                    imageView?.setImageURI(imageUri)
-                    // 检查图片是否成功加载
-                    if (imageView?.drawable == null) {
-                        android.util.Log.e("OverlayService", "图片加载失败: $imageUri")
-                        return false
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("OverlayService", "设置图片失败: $imageUri", e)
-                    return false
-                }
+                val view = ImageView(this)
+                view.setImageURI(imageUri)
+                if (view.drawable == null) return false
+                view
             }
-            
-            imageView?.scaleType = ImageView.ScaleType.FIT_XY
-            
-            // 设置透明度
-            val alpha = opacity / 100f
-            imageView?.alpha = alpha
+
+            imageView.scaleType = ImageView.ScaleType.FIT_XY
+            imageView.alpha = opacity / 100f
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
@@ -197,8 +170,7 @@ class OverlayService : Service() {
                         WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
-            
-            // 允许内容延伸至刘海/挖孔区域（Android 9+），按设置开关
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val coverCutout = com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(this)
                 params.layoutInDisplayCutoutMode = if (coverCutout)
@@ -207,96 +179,137 @@ class OverlayService : Service() {
                     WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_NEVER
             }
 
-            // 为安卓15+添加额外的兼容性设置
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
                 params.flags = params.flags or WindowManager.LayoutParams.FLAG_LAYOUT_IN_OVERSCAN
             }
-            
-            windowManager?.addView(imageView, params)
+
+            windowManager.addView(imageView, params)
+            overlays[displayKey] = DisplayOverlay(windowManager, imageView, imageUri.toString(), opacity)
             true
         } catch (e: Exception) {
-            android.util.Log.e("OverlayService", "showOverlay异常", e)
+            android.util.Log.e("OverlayService", "showOverlay异常 display=$displayKey", e)
             false
         }
     }
 
-    private fun removeOverlay() {
-        if (imageView != null && windowManager != null) {
-            try {
-                windowManager?.removeView(imageView)
-            } catch (e: Exception) {
-                // 忽略移除视图时的异常
-            }
-            imageView = null
+    private fun windowManagerForDisplay(displayId: Int): WindowManager? {
+        return if (displayId > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+            val display = dm.getDisplay(displayId) ?: return getSystemService(WINDOW_SERVICE) as WindowManager
+            val displayContext = createWindowContext(
+                display,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                null
+            )
+            displayContext.getSystemService(WindowManager::class.java)
+        } else {
+            getSystemService(WINDOW_SERVICE) as WindowManager
         }
     }
 
+    private fun removeOverlayForDisplay(displayKey: Int) {
+        val entry = overlays.remove(displayKey) ?: return
+        activeDisplayKeys.remove(displayKey)
+        if (entry.imageView != null) {
+            try {
+                entry.windowManager.removeView(entry.imageView)
+            } catch (_: Exception) {
+            }
+        }
+        if (overlays.isEmpty()) {
+            broadcastOverlayState(false)
+        }
+    }
+
+    private fun removeAllOverlays() {
+        overlays.keys.toList().forEach { removeOverlayForDisplay(it) }
+        activeDisplayKeys.clear()
+    }
+
     fun updateOpacity(opacity: Int) {
-        currentOpacity = opacity
-        imageView?.let { view ->
-            val alpha = opacity / 100f
-            view.alpha = alpha
-            android.util.Log.d("OverlayService", "透明度更新: $opacity%")
+        overlays.values.forEach { entry ->
+            entry.opacity = opacity
+            entry.imageView?.alpha = opacity / 100f
         }
     }
 
     override fun onDestroy() {
         super.onDestroy()
         android.util.Log.d("OverlayService", "服务销毁，清理资源")
-        removeOverlay()
-        currentImageUri = null
-        currentOpacity = 100
-        
-        // 简化：只清理快速使用状态，避免过度复杂化
+        removeAllOverlays()
         try {
-            val quickUsePrefs = getSharedPreferences("quick_use_prefs", 0)
-            if (quickUsePrefs.getBoolean("is_overlay_active", false)) {
-                android.util.Log.d("OverlayService", "服务销毁时清理快速使用状态")
-                quickUsePrefs.edit().putBoolean("is_overlay_active", false).apply()
-            }
+            getSharedPreferences("quick_use_prefs", 0).edit()
+                .putBoolean("is_overlay_active", false)
+                .putBoolean("is_overlay_active_main", false)
+                .putBoolean("is_overlay_active_secondary", false)
+                .apply()
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "清理快速使用状态失败", e)
         }
-        // 广播状态：已停止
-        try {
-            val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
-            stateIntent.putExtra("active", false)
-            sendBroadcast(stateIntent)
-        } catch (_: Exception) {}
+        broadcastOverlayState(false)
     }
-    
+
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        android.util.Log.d("OverlayService", "任务被移除，清理资源")
-        
-        // 简化：只清理快速使用状态
-        try {
-            val quickUsePrefs = getSharedPreferences("quick_use_prefs", 0)
-            if (quickUsePrefs.getBoolean("is_overlay_active", false)) {
-                android.util.Log.d("OverlayService", "任务移除时清理快速使用状态")
-                quickUsePrefs.edit().putBoolean("is_overlay_active", false).apply()
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("OverlayService", "清理快速使用状态失败", e)
-        }
-        // 广播状态：已停止
-        try {
-            val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
-            stateIntent.putExtra("active", false)
-            sendBroadcast(stateIntent)
-        } catch (_: Exception) {}
+        removeAllOverlays()
         stopSelf()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun broadcastOverlayState(active: Boolean) {
+        try {
+            val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
+            stateIntent.putExtra("active", active)
+            sendBroadcast(stateIntent)
+        } catch (_: Exception) {
+        }
+    }
+
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
-                "overlay_channel", "遮罩服务", NotificationManager.IMPORTANCE_LOW
+                CHANNEL_ID, "遮罩服务", NotificationManager.IMPORTANCE_LOW
             )
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(channel)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         }
     }
-} 
+
+    companion object {
+        const val ACTION_STOP_DISPLAY = "com.example.imageoverlay.STOP_DISPLAY"
+        const val ACTION_STOP_ALL = "com.example.imageoverlay.STOP_ALL"
+        const val EXTRA_DISPLAY_ID = "displayId"
+        private const val CHANNEL_ID = "overlay_channel"
+        private const val NOTIFICATION_ID = 1
+
+        private val activeDisplayKeys = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+
+        fun displayKeyFromIntentExtra(displayId: Int): Int =
+            if (displayId <= 0) Display.DEFAULT_DISPLAY else displayId
+
+        fun isRunningOnDisplay(displayKey: Int): Boolean =
+            activeDisplayKeys.contains(displayKey)
+
+        fun hasAnyOverlayRunning(): Boolean = activeDisplayKeys.isNotEmpty()
+
+        fun stopDisplay(context: Context, displayKey: Int) {
+            if (!isRunningOnDisplay(displayKey) && !hasAnyOverlayRunning()) return
+            val intent = Intent(context, OverlayService::class.java).apply {
+                action = ACTION_STOP_DISPLAY
+                putExtra(EXTRA_DISPLAY_ID, displayKey)
+            }
+            context.startService(intent)
+        }
+
+        fun stopAll(context: Context) {
+            if (!hasAnyOverlayRunning()) {
+                context.stopService(Intent(context, OverlayService::class.java))
+                return
+            }
+            val intent = Intent(context, OverlayService::class.java).apply {
+                action = ACTION_STOP_ALL
+            }
+            context.startService(intent)
+        }
+    }
+}

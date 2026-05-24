@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 贴右屏：圆心在右缘外，仅露出靠内的左半弧 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:width="22dp"
+        android:height="22dp"
+        android:gravity="center_vertical|end"
+        android:right="-11dp">
+        <shape android:shape="oval">
+            <solid android:color="#80000000" />
+            <stroke
+                android:width="1dp"
+                android:color="#40FFFFFF" />
+        </shape>
+    </item>
+</layer-list>

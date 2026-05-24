@@ -1,27 +1,58 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/ballRoot"
     android:layout_width="wrap_content"
     android:layout_height="wrap_content"
-    android:orientation="horizontal"
-    android:background="@drawable/floating_ball_background"
-    android:padding="8dp"
-    android:gravity="center_vertical">
+    android:clickable="true"
+    android:focusable="false"
+    android:descendantFocusability="blocksDescendants">
 
-    <ImageView
-        android:id="@+id/ballIcon"
-        android:layout_width="24dp"
-        android:layout_height="24dp"
-        android:src="@drawable/ic_floating_ball"
-        android:contentDescription="悬浮球图标" />
+    <FrameLayout
+        android:id="@+id/ballExpanded"
+        android:layout_width="@dimen/floating_ball_expanded_size"
+        android:layout_height="@dimen/floating_ball_expanded_size"
+        android:background="@drawable/floating_ball_expanded_bg"
+        android:clickable="false"
+        android:focusable="false">
 
-    <TextView
-        android:id="@+id/ballText"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="遮罩"
-        android:textSize="12sp"
-        android:textColor="@android:color/white"
-        android:layout_marginStart="4dp"
-        android:visibility="gone" />
+        <ImageView
+            android:id="@+id/ballIcon"
+            android:layout_width="22dp"
+            android:layout_height="22dp"
+            android:layout_gravity="center"
+            android:clickable="false"
+            android:focusable="false"
+            android:src="@drawable/ic_floating_ball"
+            android:contentDescription="@string/floating_ball_icon_desc" />
+    </FrameLayout>
 
-</LinearLayout>
+    <FrameLayout
+        android:id="@+id/ballCollapsed"
+        android:layout_width="@dimen/floating_ball_touch_width"
+        android:layout_height="@dimen/floating_ball_peek_height"
+        android:visibility="gone"
+        android:clickable="false"
+        android:focusable="false">
+
+        <FrameLayout
+            android:id="@+id/peekCap"
+            android:layout_width="@dimen/floating_ball_peek_draw_width"
+            android:layout_height="match_parent"
+            android:layout_gravity="center_vertical|end"
+            android:clickable="false"
+            android:focusable="false"
+            android:background="@drawable/floating_ball_peek_cap_right">
+
+            <ImageView
+                android:id="@+id/collapseChevron"
+                android:layout_width="7dp"
+                android:layout_height="7dp"
+                android:layout_gravity="center"
+                android:clickable="false"
+                android:focusable="false"
+                android:src="@drawable/ic_chevron_expand_left"
+                android:contentDescription="@string/floating_ball_expand_desc" />
+        </FrameLayout>
+    </FrameLayout>
+
+</FrameLayout>

@@ -201,28 +201,27 @@ object ConfigPathUtil {
 
     fun checkAndFixRoot(context: Context) {
         val sp = context.getSharedPreferences("settings", Context.MODE_PRIVATE)
-        val uriStr = sp.getString(PREF_KEY_URI, null)
-        if (!uriStr.isNullOrBlank()) {
-            val uri = Uri.parse(uriStr)
-            val docFile = DocumentFile.fromTreeUri(context, uri)
-            if (docFile == null || !docFile.exists() || !docFile.isDirectory) {
-                // 如果SAF路径无效，清除设置，强制用户重新选择
-                android.util.Log.w("ConfigPathUtil", "SAF路径无效，清除设置")
-                sp.edit().remove(PREF_KEY_URI).remove(PREF_KEY_PATH).apply()
-            } else {
-                // 检查权限是否有效
-                if (!hasValidPermission(context, uri)) {
-                    android.util.Log.w("ConfigPathUtil", "SAF权限无效，清除设置")
-                    sp.edit().remove(PREF_KEY_URI).remove(PREF_KEY_PATH).apply()
-                } else {
-                    // 确保现有目录都有.nomedia文件
+        val uriStr = sp.getString(PREF_KEY_URI, null) ?: return
+        val uri = Uri.parse(uriStr)
+        repeat(3) { attempt ->
+            try {
+                val docFile = DocumentFile.fromTreeUri(context, uri)
+                if (docFile != null && docFile.exists() && docFile.isDirectory) {
                     ensureNomediaFiles(context, docFile)
+                    return
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("ConfigPathUtil", "SAF路径检查重试 ${attempt + 1}/3", e)
+            }
+            if (attempt < 2) {
+                try {
+                    Thread.sleep(200)
+                } catch (_: InterruptedException) {
                 }
             }
-        } else {
-            // 如果没有设置SAF路径，不创建默认路径，强制用户选择
-            // 这里不做任何操作，让用户必须选择SAF路径
         }
+        // 存储卡未挂载等瞬时问题不应立刻清除用户已选目录
+        android.util.Log.w("ConfigPathUtil", "SAF路径暂时不可访问，保留设置供下次重试")
     }
     
     private fun hasValidPermission(context: Context, uri: Uri): Boolean {

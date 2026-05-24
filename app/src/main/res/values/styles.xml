@@ -5,4 +5,13 @@
         <item name="android:textColorPrimary">@color/io_text_primary</item>
         <item name="android:textColorSecondary">@color/io_text_secondary</item>
     </style>
+
+    <!-- 使用自定义 Toolbar 的页面 -->
+    <style name="Theme.ImageOverlay.NoActionBar" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:colorBackground">@color/io_bg</item>
+        <item name="android:textColorPrimary">@color/io_text_primary</item>
+        <item name="android:textColorSecondary">@color/io_text_secondary</item>
+    </style>
 </resources> 

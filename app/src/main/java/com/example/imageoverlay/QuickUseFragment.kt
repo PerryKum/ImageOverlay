@@ -1,187 +1,297 @@
 package com.example.imageoverlay
 
 import android.app.Activity
-import android.content.Intent
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.DisplayUtil
 import com.example.imageoverlay.util.PermissionUtil
 
 class QuickUseFragment : Fragment() {
-    private var imageUri: Uri? = null
-    private lateinit var imageView: ImageView
-    private lateinit var btnStart: Button
-    private lateinit var btnStop: Button
-    private var isOverlayActive = false
-    private val PREFS = "quick_use_prefs"
-    private val KEY_OVERLAY_ACTIVE = "is_overlay_active"
-    private val KEY_IMAGE_URI = "image_uri"
+
+    private data class ScreenPanel(
+        val screenType: String,
+        val root: View,
+        val labelView: TextView,
+        val imageView: ImageView,
+        val btnSelect: Button,
+        val btnStart: Button,
+        val btnStop: Button,
+        val selectRequestCode: Int,
+        var imageUri: Uri? = null,
+        var isOverlayActive: Boolean = false
+    )
+
+    private val panels = mutableListOf<ScreenPanel>()
     private var overlayStateReceiver: BroadcastReceiver? = null
-
-
+    private var pendingSelectPanel: ScreenPanel? = null
 
     override fun onCreateView(
         inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
     ): View? {
         val view = inflater.inflate(R.layout.fragment_quick_use, container, false)
-        imageView = view.findViewById(R.id.imageView)
-        val btnSelect = view.findViewById<Button>(R.id.btnSelect)
-        btnStart = view.findViewById(R.id.btnStart)
-        btnStop = view.findViewById(R.id.btnStop)
+        val containerLayout = view.findViewById<LinearLayout>(R.id.quickUseContainer)
+        val panelDivider = view.findViewById<View>(R.id.panelDivider)
+        val panelMainRoot = view.findViewById<View>(R.id.panelMain)
+        val panelSecondaryRoot = view.findViewById<View>(R.id.panelSecondary)
 
-        // 恢复状态 - 改进的状态恢复逻辑
-        restoreState()
-        updateButtonState()
+        val dual = DisplayUtil.hasSecondaryDisplay(requireContext())
 
-        btnSelect.setOnClickListener {
-            if (isOverlayActive) {
-                Toast.makeText(requireContext(), "请先关闭遮罩", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
+        if (dual) {
+            containerLayout.orientation = LinearLayout.HORIZONTAL
+            panelDivider.visibility = View.VISIBLE
+            (panelDivider.layoutParams as LinearLayout.LayoutParams).apply {
+                width = 1
+                height = LinearLayout.LayoutParams.MATCH_PARENT
+                marginStart = 4
+                marginEnd = 4
             }
-            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-                addCategory(Intent.CATEGORY_OPENABLE)
-                type = "image/png"
-                // 添加GIF支持
-                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/png", "image/gif"))
-                // 请求持久化权限
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            }
-            startActivityForResult(intent, 100)
-        }
-
-        btnStart.setOnClickListener {
-            // 再次检查状态，确保UI状态是最新的
-            if (isOverlayActive) {
-                Toast.makeText(requireContext(), "遮罩已在运行", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            
-            // 检查是否有预设配置激活
-            val hasActivePreset = ConfigRepository.getGroups().any { group ->
-                group.configs.any { it.active }
-            }
-            if (hasActivePreset) {
-                Toast.makeText(requireContext(), "请先关闭预设配置", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            if (imageUri != null) {
-                if (PermissionUtil.checkOverlayPermission(requireContext())) {
-                    val intent = Intent(requireContext(), OverlayService::class.java)
-                    intent.putExtra("imageUri", imageUri.toString())
-                    // 不传递透明度参数，让OverlayService使用全局透明度设置
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        requireContext().startForegroundService(intent)
-                    } else {
-                        requireContext().startService(intent)
-                    }
-                    isOverlayActive = true
-                    saveState()
-                    updateButtonState()
-                    Toast.makeText(requireContext(), "遮罩已启动", Toast.LENGTH_SHORT).show()
-                } else {
-                    PermissionUtil.openOverlayPermissionSettings(requireContext())
-                    Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", Toast.LENGTH_LONG).show()
+            panelSecondaryRoot.visibility = View.VISIBLE
+            listOf(panelMainRoot, panelSecondaryRoot).forEach { panelRoot ->
+                (panelRoot.layoutParams as LinearLayout.LayoutParams).apply {
+                    width = 0
+                    height = LinearLayout.LayoutParams.WRAP_CONTENT
+                    weight = 1f
                 }
-            } else {
-                Toast.makeText(requireContext(), "请先选择图片", Toast.LENGTH_SHORT).show()
             }
+        } else {
+            containerLayout.orientation = LinearLayout.VERTICAL
+            panelDivider.visibility = View.GONE
+            panelSecondaryRoot.visibility = View.GONE
         }
 
-        btnStop.setOnClickListener {
-            // 再次检查状态，确保UI状态是最新的
-            if (!isOverlayActive) {
-                Toast.makeText(requireContext(), "遮罩未在运行", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            
-            // 停止服务
-            val intent = Intent(requireContext(), OverlayService::class.java)
-            requireContext().stopService(intent)
-            isOverlayActive = false
-            saveState()
-            updateButtonState()
-            Toast.makeText(requireContext(), "遮罩已停止", Toast.LENGTH_SHORT).show()
+        panels.clear()
+        panels.add(
+            bindPanel(
+                panelMainRoot,
+                screenType = "main",
+                labelRes = R.string.quick_use_screen_main,
+                showLabel = dual,
+                selectRequestCode = REQUEST_SELECT_MAIN,
+                dualLayout = dual
+            )
+        )
+        if (dual) {
+            panels.add(
+                bindPanel(
+                    panelSecondaryRoot,
+                    screenType = "secondary",
+                    labelRes = R.string.quick_use_screen_secondary,
+                    showLabel = true,
+                    selectRequestCode = REQUEST_SELECT_SECONDARY,
+                    dualLayout = true
+                )
+            )
+        }
+
+        panels.forEach { panel ->
+            restorePanelState(panel)
+            updateButtonState(panel)
+            wirePanelListeners(panel)
         }
 
         return view
     }
 
+    private fun bindPanel(
+        root: View,
+        screenType: String,
+        labelRes: Int,
+        showLabel: Boolean,
+        selectRequestCode: Int,
+        dualLayout: Boolean
+    ): ScreenPanel {
+        val labelView = root.findViewById<TextView>(R.id.tvScreenLabel)
+        val imageView = root.findViewById<ImageView>(R.id.imageView)
+        if (showLabel) {
+            labelView.visibility = View.VISIBLE
+            labelView.setText(labelRes)
+        } else {
+            labelView.visibility = View.GONE
+        }
+        val previewHeight = resources.getDimensionPixelSize(
+            if (dualLayout) R.dimen.quick_use_preview_height_dual
+            else R.dimen.quick_use_preview_height
+        )
+        imageView.layoutParams = imageView.layoutParams.apply {
+            height = previewHeight
+        }
+        return ScreenPanel(
+            screenType = screenType,
+            root = root,
+            labelView = labelView,
+            imageView = imageView,
+            btnSelect = root.findViewById(R.id.btnSelect),
+            btnStart = root.findViewById(R.id.btnStart),
+            btnStop = root.findViewById(R.id.btnStop),
+            selectRequestCode = selectRequestCode
+        )
+    }
+
+    private fun wirePanelListeners(panel: ScreenPanel) {
+        panel.btnSelect.setOnClickListener {
+            if (panel.isOverlayActive) {
+                Toast.makeText(requireContext(), "请先关闭遮罩", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            pendingSelectPanel = panel
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "image/png"
+                putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/png", "image/gif"))
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+            }
+            @Suppress("DEPRECATION")
+            startActivityForResult(intent, panel.selectRequestCode)
+        }
+
+        panel.btnStart.setOnClickListener {
+            if (panel.isOverlayActive) {
+                Toast.makeText(requireContext(), "遮罩已在运行", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (ConfigRepository.syncPresetStateForScreenType(requireContext(), panel.screenType)) {
+                val msg = if (panel.screenType == "secondary") {
+                    R.string.quick_use_preset_active_secondary
+                } else {
+                    R.string.quick_use_preset_active_main
+                }
+                Toast.makeText(requireContext(), msg, Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (panel.imageUri == null) {
+                Toast.makeText(requireContext(), "请先选择图片", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (!PermissionUtil.checkOverlayPermission(requireContext())) {
+                PermissionUtil.openOverlayPermissionSettings(requireContext())
+                Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            startOverlayForPanel(panel)
+        }
+
+        panel.btnStop.setOnClickListener {
+            if (!panel.isOverlayActive) {
+                Toast.makeText(requireContext(), "遮罩未在运行", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            stopOverlayForPanel(panel)
+        }
+    }
+
+    private fun startOverlayForPanel(panel: ScreenPanel) {
+        val intent = Intent(requireContext(), OverlayService::class.java).apply {
+            putExtra("imageUri", panel.imageUri.toString())
+            putExtra("opacity", ConfigRepository.getDefaultOpacity(requireContext()))
+            if (panel.screenType == "secondary") {
+                putExtra(
+                    OverlayService.EXTRA_DISPLAY_ID,
+                    ConfigRepository.displayKeyForScreenType(requireContext(), "secondary")
+                )
+            }
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            requireContext().startForegroundService(intent)
+        } else {
+            requireContext().startService(intent)
+        }
+        panel.isOverlayActive = true
+        savePanelState(panel)
+        updateButtonState(panel)
+        val label = if (panel.screenType == "secondary") "副屏" else "主屏"
+        Toast.makeText(requireContext(), "${label}遮罩已启动", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun stopOverlayForPanel(panel: ScreenPanel) {
+        val displayKey = ConfigRepository.displayKeyForScreenType(requireContext(), panel.screenType)
+        OverlayService.stopDisplay(requireContext(), displayKey)
+        panel.isOverlayActive = false
+        savePanelState(panel)
+        updateButtonState(panel)
+        val label = if (panel.screenType == "secondary") "副屏" else "主屏"
+        Toast.makeText(requireContext(), "${label}遮罩已停止", Toast.LENGTH_SHORT).show()
+    }
+
     override fun onResume() {
         super.onResume()
-        // 简单恢复状态
-        restoreState()
-        updateButtonState()
-        // 注册遮罩状态广播接收器
+        ConfigRepository.syncAllPresetStates(requireContext())
+        panels.forEach { panel ->
+            restorePanelState(panel)
+            updateButtonState(panel)
+        }
         registerOverlayStateReceiver()
     }
+
     override fun onPause() {
         super.onPause()
-        // 反注册广播接收器
         try {
             overlayStateReceiver?.let { requireContext().unregisterReceiver(it) }
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
+        overlayStateReceiver = null
     }
 
-    
-
-
-    private fun restoreState() {
+    private fun restorePanelState(panel: ScreenPanel) {
         try {
             val sp = requireContext().getSharedPreferences(PREFS, 0)
-            val imageUriStr = sp.getString(KEY_IMAGE_URI, null)
-            
-            // 恢复图片URI
-            imageUri = if (imageUriStr != null) {
+            val imageUriStr = sp.getString(imageUriKey(panel.screenType), null)
+                ?: if (panel.screenType == "main") sp.getString(KEY_IMAGE_URI_LEGACY, null) else null
+
+            panel.imageUri = imageUriStr?.let {
                 try {
-                    Uri.parse(imageUriStr)
+                    Uri.parse(it)
                 } catch (e: Exception) {
-                    android.util.Log.e("QuickUseFragment", "解析图片URI失败", e)
+                    android.util.Log.e("QuickUseFragment", "解析图片URI失败 screen=${panel.screenType}", e)
                     null
                 }
-            } else null
-            
-            // 设置图片显示
-            if (imageUri != null) {
+            }
+
+            if (panel.imageUri != null) {
                 try {
-                    imageView.setImageURI(imageUri)
+                    panel.imageView.setImageURI(panel.imageUri)
                 } catch (e: Exception) {
-                    android.util.Log.e("QuickUseFragment", "设置图片显示失败", e)
-                    imageUri = null
+                    android.util.Log.e("QuickUseFragment", "设置图片失败 screen=${panel.screenType}", e)
+                    panel.imageUri = null
                 }
+            } else {
+                panel.imageView.setImageDrawable(null)
             }
-            
-            // 关键：检查服务是否真的在运行，而不是盲目相信保存的状态
-            val serviceRunning = isOverlayServiceRunning()
-            isOverlayActive = serviceRunning
-            
-            // 如果保存的状态与实际不符，立即同步
-            val savedIsOverlayActive = sp.getBoolean(KEY_OVERLAY_ACTIVE, false)
-            if (savedIsOverlayActive != serviceRunning) {
-                android.util.Log.w("QuickUseFragment", "状态不一致，同步: 保存=$savedIsOverlayActive, 实际=$serviceRunning")
-                saveState()
+
+            val serviceRunning = isOverlayRunningForPanel(panel)
+            panel.isOverlayActive = serviceRunning
+
+            val savedActive = sp.getBoolean(overlayActiveKey(panel.screenType), false)
+                || (panel.screenType == "main" && sp.getBoolean(KEY_OVERLAY_ACTIVE_LEGACY, false))
+            if (savedActive != serviceRunning) {
+                savePanelState(panel)
             }
-            
-            android.util.Log.d("QuickUseFragment", "状态恢复完成: isOverlayActive=$isOverlayActive, imageUri=${imageUri?.toString()}")
         } catch (e: Exception) {
-            android.util.Log.e("QuickUseFragment", "状态恢复失败", e)
-            // 恢复失败时重置状态
-            isOverlayActive = false
-            imageUri = null
-            saveState()
+            android.util.Log.e("QuickUseFragment", "状态恢复失败 screen=${panel.screenType}", e)
+            panel.isOverlayActive = false
+            panel.imageUri = null
+            savePanelState(panel)
         }
+    }
+
+    private fun isOverlayRunningForPanel(panel: ScreenPanel): Boolean {
+        val displayKey = ConfigRepository.displayKeyForScreenType(requireContext(), panel.screenType)
+        return OverlayService.isRunningOnDisplay(displayKey)
     }
 
     private fun registerOverlayStateReceiver() {
@@ -189,144 +299,94 @@ class QuickUseFragment : Fragment() {
             if (overlayStateReceiver != null) return
             overlayStateReceiver = object : BroadcastReceiver() {
                 override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == "com.example.imageoverlay.OVERLAY_STATE_CHANGED") {
-                        val active = intent.getBooleanExtra("active", false)
-                        isOverlayActive = active
-                        saveState()
-                        updateButtonState()
-                        android.util.Log.d("QuickUseFragment", "收到遮罩状态广播: active=$active")
+                    if (intent?.action != ACTION_OVERLAY_STATE_CHANGED) return
+                    panels.forEach { panel ->
+                        panel.isOverlayActive = isOverlayRunningForPanel(panel)
+                        savePanelState(panel)
+                        updateButtonState(panel)
                     }
                 }
             }
-            val filter = IntentFilter("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
-            requireContext().registerReceiver(overlayStateReceiver, filter)
+            requireContext().registerReceiver(
+                overlayStateReceiver,
+                IntentFilter(ACTION_OVERLAY_STATE_CHANGED)
+            )
         } catch (e: Exception) {
             android.util.Log.e("QuickUseFragment", "注册遮罩状态接收器失败", e)
         }
     }
 
-    private fun saveState() {
+    private fun savePanelState(panel: ScreenPanel) {
         try {
-            val sp = requireContext().getSharedPreferences(PREFS, 0)
-            sp.edit()
-                .putBoolean(KEY_OVERLAY_ACTIVE, isOverlayActive)
-                .putString(KEY_IMAGE_URI, imageUri?.toString())
+            requireContext().getSharedPreferences(PREFS, 0).edit()
+                .putBoolean(overlayActiveKey(panel.screenType), panel.isOverlayActive)
+                .putString(imageUriKey(panel.screenType), panel.imageUri?.toString())
                 .apply()
-            android.util.Log.d("QuickUseFragment", "状态已保存: isOverlayActive=$isOverlayActive")
         } catch (e: Exception) {
-            android.util.Log.e("QuickUseFragment", "保存状态失败", e)
+            android.util.Log.e("QuickUseFragment", "保存状态失败 screen=${panel.screenType}", e)
         }
     }
 
-    private fun isOverlayServiceRunning(): Boolean {
-        return try {
-            // 方法1：检查前台服务通知（最可靠）
-            val notificationManager = requireContext().getSystemService(android.app.NotificationManager::class.java)
-            val activeNotifications = notificationManager.activeNotifications
-            val hasNotification = activeNotifications.any { 
-                it.packageName == requireContext().packageName && it.id == 1
-            }
-            
-            if (hasNotification) {
-                android.util.Log.d("QuickUseFragment", "通过通知检测到服务运行")
-                return true
-            }
-            
-            // 方法2：检查运行的服务（备用方案）
-            try {
-                val manager = requireContext().getSystemService(android.app.ActivityManager::class.java)
-                val runningServices = manager.getRunningServices(Integer.MAX_VALUE)
-                val isServiceInList = runningServices.any { 
-                    it.service.className == "com.example.imageoverlay.OverlayService" 
-                }
-                
-                if (isServiceInList) {
-                    android.util.Log.d("QuickUseFragment", "通过服务列表检测到服务运行")
-                    return true
-                }
-            } catch (e: Exception) {
-                android.util.Log.w("QuickUseFragment", "服务列表检查失败，使用通知检查结果", e)
-            }
-            
-            android.util.Log.d("QuickUseFragment", "服务未运行")
-            false
-        } catch (e: Exception) {
-            android.util.Log.e("QuickUseFragment", "检查服务状态失败", e)
-            false
-        }
-    }
-
-    private fun hasUriPermission(uri: Uri): Boolean {
-        return try {
-            // 检查是否有持久化权限
-            val flags = requireContext().contentResolver.getPersistedUriPermissions()
-            val hasPermission = flags.any { permission ->
-                permission.uri == uri && permission.isReadPermission
-            }
-            
-            if (!hasPermission) {
-                android.util.Log.w("QuickUseFragment", "没有持久化权限: $uri")
-                return false
-            }
-            
-            // 尝试访问URI来验证权限是否真的有效
-            requireContext().contentResolver.openInputStream(uri)?.use {
-                // 如果能成功打开，说明权限有效
-                true
-            } ?: false
-        } catch (e: Exception) {
-            android.util.Log.e("QuickUseFragment", "检查URI权限失败: $uri", e)
-            false
-        }
-    }
-
-    private fun updateButtonState() {
-        btnStart.isEnabled = !isOverlayActive
-        btnStop.isEnabled = isOverlayActive
+    private fun updateButtonState(panel: ScreenPanel) {
+        panel.btnStart.isEnabled = !panel.isOverlayActive
+        panel.btnStop.isEnabled = panel.isOverlayActive
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == 100 && resultCode == Activity.RESULT_OK) {
+        val panel = panels.find { it.selectRequestCode == requestCode } ?: pendingSelectPanel
+        pendingSelectPanel = null
+        if (panel == null || resultCode != Activity.RESULT_OK) return
+
+        try {
+            panel.imageUri = data?.data
+            if (panel.imageUri == null) return
+
             try {
-            imageUri = data?.data
-                if (imageUri != null) {
-                    // 获取持久化权限，这是关键！
-                    try {
-                        requireContext().contentResolver.takePersistableUriPermission(
-                            imageUri!!,
-                            Intent.FLAG_GRANT_READ_URI_PERMISSION
-                        )
-                        android.util.Log.d("QuickUseFragment", "已获取图片URI持久化权限")
-                    } catch (e: SecurityException) {
-                        android.util.Log.e("QuickUseFragment", "无法获取持久化权限", e)
-                        Toast.makeText(requireContext(), "无法获取图片访问权限，请重新选择", Toast.LENGTH_SHORT).show()
-                        imageUri = null
-                        return
-                    }
-                    
-                    // 验证图片是否可以正常加载
-                    try {
-            imageView.setImageURI(imageUri)
-                        // 检查是否成功设置
-                        if (imageView.drawable == null) {
-                            throw Exception("图片加载失败")
-                        }
-                    } catch (e: Exception) {
-                        android.util.Log.e("QuickUseFragment", "图片加载验证失败", e)
-                        Toast.makeText(requireContext(), "图片加载失败，请选择其他图片", Toast.LENGTH_SHORT).show()
-                        imageUri = null
-                        return
-                    }
-                    
-                    saveState()
-                    android.util.Log.d("QuickUseFragment", "图片选择成功: ${imageUri?.toString()}")
+                requireContext().contentResolver.takePersistableUriPermission(
+                    panel.imageUri!!,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                )
+            } catch (e: SecurityException) {
+                android.util.Log.e("QuickUseFragment", "无法获取持久化权限", e)
+                Toast.makeText(requireContext(), "无法获取图片访问权限，请重新选择", Toast.LENGTH_SHORT).show()
+                panel.imageUri = null
+                return
+            }
+
+            try {
+                panel.imageView.setImageURI(panel.imageUri)
+                if (panel.imageView.drawable == null) {
+                    throw IllegalStateException("图片加载失败")
                 }
             } catch (e: Exception) {
-                android.util.Log.e("QuickUseFragment", "处理图片选择结果失败", e)
-                Toast.makeText(requireContext(), "图片选择失败，请重试", Toast.LENGTH_SHORT).show()
-                imageUri = null
+                android.util.Log.e("QuickUseFragment", "图片加载验证失败", e)
+                Toast.makeText(requireContext(), "图片加载失败，请选择其他图片", Toast.LENGTH_SHORT).show()
+                panel.imageUri = null
+                return
             }
+
+            savePanelState(panel)
+        } catch (e: Exception) {
+            android.util.Log.e("QuickUseFragment", "处理图片选择结果失败", e)
+            Toast.makeText(requireContext(), "图片选择失败，请重试", Toast.LENGTH_SHORT).show()
+            panel.imageUri = null
         }
     }
-} 
+
+    private fun imageUriKey(screenType: String) =
+        "image_uri_$screenType"
+
+    private fun overlayActiveKey(screenType: String) =
+        "is_overlay_active_$screenType"
+
+    companion object {
+        private const val PREFS = "quick_use_prefs"
+        private const val KEY_IMAGE_URI_LEGACY = "image_uri"
+        private const val KEY_OVERLAY_ACTIVE_LEGACY = "is_overlay_active"
+        private const val ACTION_OVERLAY_STATE_CHANGED =
+            "com.example.imageoverlay.OVERLAY_STATE_CHANGED"
+        private const val REQUEST_SELECT_MAIN = 100
+        private const val REQUEST_SELECT_SECONDARY = 101
+    }
+}

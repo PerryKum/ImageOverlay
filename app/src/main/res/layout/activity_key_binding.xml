@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
@@ -9,6 +10,7 @@
         android:layout_width="match_parent"
         android:layout_height="?attr/actionBarSize"
         android:background="?attr/colorPrimary"
+        app:navigationIcon="?attr/homeAsUpIndicator"
         android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar">
         
         <TextView
@@ -23,7 +25,7 @@
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="点击列表项来绑定按键，支持最多3个按键组合"
+        android:text="为下列功能绑定实体按键（每项最多 3 个组合键）"
         android:textSize="14sp"
         android:padding="16dp"
         android:textColor="@android:color/darker_gray"/>

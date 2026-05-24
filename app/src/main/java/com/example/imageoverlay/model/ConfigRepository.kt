@@ -1,7 +1,10 @@
 package com.example.imageoverlay.model
 
 import android.content.Context
+import android.hardware.display.DisplayManager
 import android.net.Uri
+import android.view.Display
+import com.example.imageoverlay.OverlayService
 import com.example.imageoverlay.util.ConfigPathUtil
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
@@ -12,12 +15,17 @@ import java.io.OutputStreamWriter
 object ConfigRepository {
     private val gson = Gson()
     private var groupList: MutableList<Group> = mutableListOf()
+    private val configLock = Any()
     private const val PREF_DEFAULT = "default_config"
     private const val KEY_DEFAULT_NAME = "name"
     private const val KEY_DEFAULT_URI = "uri"
     private const val KEY_DEFAULT_GROUP = "group"
     private const val KEY_DEFAULT_ACTIVE = "active"
     private const val KEY_DEFAULT_OPACITY = "opacity"
+    private const val KEY_DEFAULT_NAME_SECONDARY = "name_secondary"
+    private const val KEY_DEFAULT_URI_SECONDARY = "uri_secondary"
+    private const val KEY_DEFAULT_GROUP_SECONDARY = "group_secondary"
+    private const val KEY_DEFAULT_ACTIVE_SECONDARY = "active_secondary"
     private const val PREF_APP_BINDINGS = "app_bindings"
     private const val PREF_SETTINGS = "settings"
     private const val KEY_AUTO_START_OVERLAY = "auto_start_overlay"
@@ -32,136 +40,225 @@ object ConfigRepository {
     private val MANUAL_OPERATION_COOLDOWN = 5000L // 手动操作冷却时间5秒
 
     fun load(context: Context) {
+        synchronized(configLock) {
+            loadInternal(context)
+        }
+    }
+
+    private fun loadInternal(context: Context) {
+        val previous = groupList.toList()
         try {
             val configFile = ConfigPathUtil.getConfigFile(context)
             val uriStr = ConfigPathUtil.getConfigRoot(context)
-            
+
             if (uriStr.isBlank()) {
-                android.util.Log.w("ConfigRepository", "配置路径为空，使用空列表")
-                groupList = mutableListOf()
+                android.util.Log.w("ConfigRepository", "配置路径为空")
+                if (!restoreOnLoadFailure(previous, "配置路径为空")) {
+                    groupList = mutableListOf()
+                }
                 return
             }
-            
+
             if (uriStr.startsWith("content://")) {
-                // SAF方式读取
-                try {
-                    val rootUri = Uri.parse(uriStr)
-                    val rootDoc =
-                        androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
-                    
-                    if (rootDoc == null || !rootDoc.exists()) {
-                        android.util.Log.w("ConfigRepository", "SAF根目录不存在，使用空列表")
-                        groupList = mutableListOf()
-                        return
-                    }
-                    
-                    // 检查权限是否有效
-                    if (!hasValidSafPermission(context, rootUri)) {
-                        android.util.Log.w("ConfigRepository", "SAF权限无效，使用空列表")
-                        groupList = mutableListOf()
-                        return
-                    }
-                    
-                    // 统一在 ImageOverlay 目录下读写 config.json
-                    val overlayDoc = rootDoc.findFile("ImageOverlay")
-                        ?: rootDoc.createDirectory("ImageOverlay")
-                    
-                    if (overlayDoc == null) {
-                        android.util.Log.w("ConfigRepository", "无法创建ImageOverlay目录，使用空列表")
-                        groupList = mutableListOf()
-                        return
-                    }
-                    
-                    var configDoc = overlayDoc.findFile("config.json")
-                    if (configDoc == null) {
-                        configDoc = overlayDoc.createFile("application/json", "config.json")
-                        // 写入空数组
-                        configDoc?.uri?.let { uri ->
-                            context.contentResolver.openOutputStream(uri, "wt")
-                                ?.use { it.write("[]".toByteArray()) }
-                        }
-                    }
-                    
-                    if (configDoc == null) {
-                        android.util.Log.w("ConfigRepository", "无法创建config.json文件，使用空列表")
-                        groupList = mutableListOf()
-                        return
-                    }
-                    
-                    val inputStream =
-                        configDoc.uri?.let { context.contentResolver.openInputStream(it) }
-                    if (inputStream != null) {
-                        val reader = InputStreamReader(inputStream)
-                        val json = reader.readText()
-                        reader.close()
-                        inputStream.close()
-                        if (json.isNotBlank()) {
-                            val type = object : TypeToken<MutableList<Group>>() {}.type
-                            groupList = gson.fromJson(json, type) ?: mutableListOf()
-                        } else {
-                            groupList = mutableListOf()
-                        }
-                    } else {
-                        groupList = mutableListOf()
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("ConfigRepository", "SAF方式读取配置失败", e)
-                    groupList = mutableListOf()
-                }
+                loadFromSaf(context, uriStr, previous)
             } else {
-                // 普通文件方式
-                try {
-                    if (!configFile.exists()) {
-                        configFile.writeText("[]")
-                    }
-                    if (configFile.exists()) {
-                        val json = configFile.readText()
-                        if (json.isNotBlank()) {
-                            val type = object : TypeToken<MutableList<Group>>() {}.type
-                            groupList = gson.fromJson(json, type) ?: mutableListOf()
-                        } else {
-                            groupList = mutableListOf()
-                        }
-                    } else {
-                        groupList = mutableListOf()
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("ConfigRepository", "普通文件方式读取配置失败", e)
-                    groupList = mutableListOf()
+                loadFromFile(configFile, previous)
+            }
+
+            var needMigration = false
+            for (group in groupList) {
+                if (group.id.isBlank()) {
+                    group.id = java.util.UUID.randomUUID().toString()
+                    needMigration = true
                 }
+            }
+            if (needMigration) {
+                saveInternal(context)
             }
             android.util.Log.d("ConfigRepository", "配置加载完成，共${groupList.size}个组")
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "配置加载出现未知异常", e)
+            if (!restoreOnLoadFailure(previous, "配置加载异常")) {
+                groupList = mutableListOf()
+            }
+        }
+    }
+
+    private fun loadFromSaf(context: Context, uriStr: String, previous: List<Group>) {
+        try {
+            val rootUri = Uri.parse(uriStr)
+            val rootDoc =
+                androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
+
+            if (rootDoc == null || !rootDoc.exists()) {
+                if (!restoreOnLoadFailure(previous, "SAF根目录不可访问")) {
+                    groupList = mutableListOf()
+                }
+                return
+            }
+
+            if (!hasValidSafPermission(context, rootUri)) {
+                if (!restoreOnLoadFailure(previous, "SAF权限暂时无效")) {
+                    groupList = mutableListOf()
+                }
+                return
+            }
+
+            val overlayDoc = rootDoc.findFile("ImageOverlay")
+                ?: rootDoc.createDirectory("ImageOverlay")
+
+            if (overlayDoc == null || !overlayDoc.exists()) {
+                if (!restoreOnLoadFailure(previous, "无法访问 ImageOverlay 目录")) {
+                    groupList = mutableListOf()
+                }
+                return
+            }
+
+            var configDoc = findConfigJsonDoc(overlayDoc)
+            if (configDoc == null) {
+                if (previous.isNotEmpty()) {
+                    restoreOnLoadFailure(previous, "找不到 config.json")
+                    return
+                }
+                configDoc = overlayDoc.createFile("application/json", "config.json")
+                configDoc?.uri?.let { uri ->
+                    context.contentResolver.openOutputStream(uri, "wt")
+                        ?.use { it.write("[]".toByteArray()) }
+                }
+            }
+
+            if (configDoc == null) {
+                if (!restoreOnLoadFailure(previous, "无法打开 config.json")) {
+                    groupList = mutableListOf()
+                }
+                return
+            }
+
+            val json = readJsonFromSaf(context, configDoc)
+            if (json == null) {
+                if (!restoreOnLoadFailure(previous, "SAF 读取 config.json 失败")) {
+                    groupList = mutableListOf()
+                }
+                return
+            }
+
+            applyJsonToGroupList(json)
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "SAF方式读取配置失败", e)
+            if (!restoreOnLoadFailure(previous, "SAF读取异常")) {
+                groupList = mutableListOf()
+            }
+        }
+    }
+
+    private fun loadFromFile(configFile: File, previous: List<Group>) {
+        try {
+            if (!configFile.exists()) {
+                if (previous.isNotEmpty()) {
+                    restoreOnLoadFailure(previous, "本地 config.json 不存在")
+                    return
+                }
+                configFile.parentFile?.mkdirs()
+                configFile.writeText("[]")
+            }
+            if (!configFile.exists()) {
+                if (!restoreOnLoadFailure(previous, "无法创建 config.json")) {
+                    groupList = mutableListOf()
+                }
+                return
+            }
+            val json = configFile.readText()
+            applyJsonToGroupList(json)
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "普通文件方式读取配置失败", e)
+            if (!restoreOnLoadFailure(previous, "文件读取异常")) {
+                groupList = mutableListOf()
+            }
+        }
+    }
+
+    private fun applyJsonToGroupList(json: String) {
+        if (json.isNotBlank()) {
+            val type = object : TypeToken<MutableList<Group>>() {}.type
+            groupList = gson.fromJson(json, type) ?: mutableListOf()
+        } else {
             groupList = mutableListOf()
         }
-        // no-op: default config is stored separately in SharedPreferences
     }
-    
+
+    private fun findConfigJsonDoc(
+        overlayDoc: androidx.documentfile.provider.DocumentFile
+    ): androidx.documentfile.provider.DocumentFile? {
+        overlayDoc.findFile("config.json")?.takeIf { it.exists() }?.let { return it }
+        return overlayDoc.listFiles().firstOrNull { file ->
+            file.isFile && file.name?.equals("config.json", ignoreCase = true) == true
+        }
+    }
+
+    private fun readJsonFromSaf(
+        context: Context,
+        configDoc: androidx.documentfile.provider.DocumentFile
+    ): String? {
+        repeat(3) { attempt ->
+            try {
+                val uri = configDoc.uri ?: return@repeat
+                context.contentResolver.openInputStream(uri)?.use { stream ->
+                    return InputStreamReader(stream).readText()
+                }
+            } catch (e: Exception) {
+                android.util.Log.w("ConfigRepository", "SAF读取重试 ${attempt + 1}/3", e)
+                if (attempt < 2) {
+                    try {
+                        Thread.sleep(150)
+                    } catch (_: InterruptedException) {
+                    }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun restoreOnLoadFailure(previous: List<Group>, reason: String): Boolean {
+        if (previous.isNotEmpty()) {
+            groupList = previous.toMutableList()
+            android.util.Log.w(
+                "ConfigRepository",
+                "$reason，保留内存缓存 ${groupList.size} 组"
+            )
+            return true
+        }
+        return false
+    }
+
     private fun hasValidSafPermission(context: Context, uri: Uri): Boolean {
         return try {
-            // 检查是否有持久化权限
-            val flags = context.contentResolver.getPersistedUriPermissions()
-            val hasPermission = flags.any { permission ->
-                permission.uri == uri && 
-                (permission.isReadPermission || permission.isWritePermission)
-            }
-            
-            if (!hasPermission) {
-                android.util.Log.w("ConfigRepository", "没有SAF持久化权限")
-                return false
-            }
-            
-            // 尝试访问目录来验证权限
             val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
-            docFile?.exists() == true && docFile.isDirectory
+            if (docFile?.exists() == true && docFile.isDirectory) {
+                return true
+            }
+            val flags = context.contentResolver.getPersistedUriPermissions()
+            flags.any { permission ->
+                urisMatch(permission.uri, uri) &&
+                    (permission.isReadPermission || permission.isWritePermission)
+            }
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "SAF权限检查失败", e)
             false
         }
     }
 
+    private fun urisMatch(a: Uri, b: Uri): Boolean {
+        if (a == b) return true
+        return a.toString().trimEnd('/') == b.toString().trimEnd('/')
+    }
+
     fun save(context: Context) {
+        synchronized(configLock) {
+            saveInternal(context)
+        }
+    }
+
+    private fun saveInternal(context: Context) {
         val configFile = ConfigPathUtil.getConfigFile(context)
         val uriStr = ConfigPathUtil.getConfigRoot(context)
         val json = gson.toJson(groupList)
@@ -172,7 +269,7 @@ object ConfigRepository {
                 val rootDoc = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, rootUri)
                 val overlayDoc = rootDoc?.findFile("ImageOverlay")
                     ?: rootDoc?.createDirectory("ImageOverlay")
-                var configDoc = overlayDoc?.findFile("config.json")
+                var configDoc = overlayDoc?.let { findConfigJsonDoc(it) }
                 if (configDoc == null) {
                     configDoc = overlayDoc?.createFile("application/json", "config.json")
                 }
@@ -194,35 +291,105 @@ object ConfigRepository {
 
     fun getGroups(): MutableList<Group> = groupList
 
-    fun setDefaultConfig(context: Context, groupName: String, config: Config) {
+    fun getGroupsByScreenType(screenType: String): MutableList<Group> {
+        return groupList.filter { it.screenType == screenType }.toMutableList()
+    }
+
+    private fun defaultNameKey(screenType: String) =
+        if (screenType == "secondary") KEY_DEFAULT_NAME_SECONDARY else KEY_DEFAULT_NAME
+
+    private fun defaultUriKey(screenType: String) =
+        if (screenType == "secondary") KEY_DEFAULT_URI_SECONDARY else KEY_DEFAULT_URI
+
+    private fun defaultGroupKey(screenType: String) =
+        if (screenType == "secondary") KEY_DEFAULT_GROUP_SECONDARY else KEY_DEFAULT_GROUP
+
+    private fun defaultActiveKey(screenType: String) =
+        if (screenType == "secondary") KEY_DEFAULT_ACTIVE_SECONDARY else KEY_DEFAULT_ACTIVE
+
+    fun displayKeyForScreenType(context: Context, screenType: String): Int {
+        if (screenType == "secondary") {
+            val dm = context.getSystemService(Context.DISPLAY_SERVICE) as? DisplayManager
+            val displays = dm?.displays
+            if (displays != null && displays.size > 1) {
+                return displays[1].displayId
+            }
+        }
+        return Display.DEFAULT_DISPLAY
+    }
+
+    fun setDefaultConfig(context: Context, groupId: String, config: Config, screenType: String = "main") {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
         sp.edit()
-            .putString(KEY_DEFAULT_NAME, config.configName)
-            .putString(KEY_DEFAULT_URI, config.imageUri)
-            .putString(KEY_DEFAULT_GROUP, groupName)
+            .putString(defaultNameKey(screenType), config.configName)
+            .putString(defaultUriKey(screenType), config.imageUri)
+            .putString(defaultGroupKey(screenType), groupId)
             .apply()
     }
 
-    fun getDefaultConfig(context: Context): Config? {
+    fun getDefaultConfig(context: Context, screenType: String = "main"): Config? {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
-        val name = sp.getString(KEY_DEFAULT_NAME, null)
-        val uri = sp.getString(KEY_DEFAULT_URI, null)
+        val name = sp.getString(defaultNameKey(screenType), null)
+        val uri = sp.getString(defaultUriKey(screenType), null)
         return if (!name.isNullOrBlank() && !uri.isNullOrBlank()) Config(name, uri, false) else null
     }
 
-    fun getDefaultGroupName(context: Context): String? {
+    fun getDefaultGroupId(context: Context, screenType: String = "main"): String? {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
-        return sp.getString(KEY_DEFAULT_GROUP, null)
+        return sp.getString(defaultGroupKey(screenType), null)
     }
 
-    fun setDefaultActive(context: Context, active: Boolean) {
+    fun setDefaultActive(context: Context, active: Boolean, screenType: String = "main") {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
-        sp.edit().putBoolean(KEY_DEFAULT_ACTIVE, active).apply()
+        sp.edit().putBoolean(defaultActiveKey(screenType), active).apply()
     }
 
-    fun isDefaultActive(context: Context): Boolean {
+    fun isDefaultActive(context: Context, screenType: String = "main"): Boolean {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
-        return sp.getBoolean(KEY_DEFAULT_ACTIVE, false)
+        return sp.getBoolean(defaultActiveKey(screenType), false)
+    }
+
+    fun isOverlayRunningForScreenType(context: Context, screenType: String): Boolean {
+        return OverlayService.isRunningOnDisplay(displayKeyForScreenType(context, screenType))
+    }
+
+    /** 解析某块屏要显示的遮罩：优先当前激活项，其次该屏默认配置，再其次任意有图的配置 */
+    fun resolveOverlayConfigForScreenType(context: Context, screenType: String): Config? {
+        groupList.filter { it.screenType == screenType }.forEach { group ->
+            group.configs.forEach { config ->
+                if (config.active && config.imageUri.isNotBlank()) {
+                    return config
+                }
+            }
+        }
+        getDefaultConfig(context, screenType)?.let { config ->
+            if (config.imageUri.isNotBlank()) return config
+        }
+        groupList.filter { it.screenType == screenType }.forEach { group ->
+            group.configs.firstOrNull { it.imageUri.isNotBlank() }?.let { return it }
+        }
+        return null
+    }
+
+    fun findGroupWithActiveOrDefaultConfig(screenType: String, config: Config): Group? {
+        return groupList.find { group ->
+            group.screenType == screenType &&
+                group.configs.any { it.configName == config.configName }
+        }
+    }
+
+    fun getKeyBindingFunctionKeys(context: Context): List<String> {
+        val keys = mutableListOf(
+            "toggle_overlay",
+            "toggle_overlay_main",
+            "toggle_overlay_secondary",
+            "toggle_floating_ball"
+        )
+        if (!com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
+            keys.remove("toggle_overlay_main")
+            keys.remove("toggle_overlay_secondary")
+        }
+        return keys
     }
 
     fun setDefaultOpacity(context: Context, opacity: Int) {
@@ -235,19 +402,86 @@ object ConfigRepository {
         return sp.getInt(KEY_DEFAULT_OPACITY, 100)
     }
 
-    fun clearDefaultConfig(context: Context) {
+    fun clearDefaultConfig(context: Context, screenType: String = "main") {
         val sp = context.getSharedPreferences(PREF_DEFAULT, Context.MODE_PRIVATE)
         sp.edit()
-            .remove(KEY_DEFAULT_NAME)
-            .remove(KEY_DEFAULT_URI)
-            .remove(KEY_DEFAULT_GROUP)
-            .putBoolean(KEY_DEFAULT_ACTIVE, false)
+            .remove(defaultNameKey(screenType))
+            .remove(defaultUriKey(screenType))
+            .remove(defaultGroupKey(screenType))
+            .putBoolean(defaultActiveKey(screenType), false)
             .apply()
     }
 
+    // 通过 UUID 查找组
+    fun findGroupById(id: String): Group? {
+        return groupList.find { it.id == id }
+    }
+
+    // 只清除同屏类型的 active 状态
+    fun clearActiveConfigsForScreenType(screenType: String) {
+        groupList.filter { it.screenType == screenType }.forEach { group ->
+            group.configs.forEach { config -> config.active = false }
+        }
+    }
+
+    private const val QUICK_USE_PREFS = "quick_use_prefs"
+    private const val QUICK_USE_ACTIVE_PREFIX = "is_overlay_active_"
+    private const val QUICK_USE_ACTIVE_LEGACY = "is_overlay_active"
+
+    /** 该屏遮罩是否由「快速使用」启动（与预设互斥判断用） */
+    fun isQuickUseOverlayActive(context: Context, screenType: String): Boolean {
+        val sp = context.getSharedPreferences(QUICK_USE_PREFS, Context.MODE_PRIVATE)
+        val saved = sp.getBoolean(QUICK_USE_ACTIVE_PREFIX + screenType, false) ||
+            (screenType == "main" && sp.getBoolean(QUICK_USE_ACTIVE_LEGACY, false))
+        return saved && isOverlayRunningForScreenType(context, screenType)
+    }
+
+    /**
+     * 将某屏预设状态与真实遮罩服务对齐；服务未运行则清理残留的 active / defaultActive。
+     * @return 该屏是否仍有预设遮罩在运行（与快速使用互斥）
+     */
+    fun syncPresetStateForScreenType(context: Context, screenType: String): Boolean {
+        val overlayRunning = isOverlayRunningForScreenType(context, screenType)
+        val hasActiveConfigFlags = getGroupsByScreenType(screenType).any { group ->
+            group.configs.any { it.active }
+        }
+        val savedDefaultActive = isDefaultActive(context, screenType)
+
+        if (!overlayRunning) {
+            var changed = false
+            if (hasActiveConfigFlags) {
+                clearActiveConfigsForScreenType(screenType)
+                changed = true
+            }
+            if (savedDefaultActive) {
+                setDefaultActive(context, false, screenType)
+                changed = true
+            }
+            if (changed) {
+                save(context)
+                android.util.Log.d(
+                    "ConfigRepository",
+                    "已同步 $screenType 预设：遮罩未运行，已清理残留标记"
+                )
+            }
+            return false
+        }
+
+        if (isQuickUseOverlayActive(context, screenType)) {
+            return false
+        }
+
+        return true
+    }
+
+    fun syncAllPresetStates(context: Context) {
+        syncPresetStateForScreenType(context, "main")
+        syncPresetStateForScreenType(context, "secondary")
+    }
+
     // 新增：设置组的默认遮罩
-    fun setGroupDefaultConfig(groupName: String, configName: String) {
-        val group = groupList.find { it.groupName == groupName }
+    fun setGroupDefaultConfig(groupId: String, configName: String) {
+        val group = findGroupById(groupId)
         group?.let {
             // 清除其他配置的默认标记
             it.configs.forEach { config -> config.isDefault = false }
@@ -258,20 +492,20 @@ object ConfigRepository {
     }
 
     // 新增：获取组的默认遮罩
-    fun getGroupDefaultConfig(groupName: String): Config? {
-        val group = groupList.find { it.groupName == groupName }
+    fun getGroupDefaultConfig(groupId: String): Config? {
+        val group = findGroupById(groupId)
         return group?.configs?.find { it.isDefault } ?: group?.configs?.firstOrNull()
     }
 
     // 新增：绑定应用到组
-    fun bindAppToGroup(groupName: String, packageName: String) {
-        val group = groupList.find { it.groupName == groupName }
+    fun bindAppToGroup(groupId: String, packageName: String) {
+        val group = findGroupById(groupId)
         group?.boundPackageName = packageName
     }
 
     // 新增：解绑应用
-    fun unbindAppFromGroup(groupName: String) {
-        val group = groupList.find { it.groupName == groupName }
+    fun unbindAppFromGroup(groupId: String) {
+        val group = findGroupById(groupId)
         group?.boundPackageName = null
     }
 
@@ -293,8 +527,7 @@ object ConfigRepository {
                 
                 // 停止悬浮球服务
                 try {
-                    val floatingBallIntent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
-                    context.stopService(floatingBallIntent)
+                    com.example.imageoverlay.util.FloatingBallLauncher.stop(context)
                     android.util.Log.d("ConfigRepository", "桌面检测：停止悬浮球服务")
                 } catch (e: Exception) {
                     android.util.Log.e("ConfigRepository", "停止悬浮球服务失败", e)
@@ -305,8 +538,8 @@ object ConfigRepository {
                     // 自动开启开关开启，关闭遮罩
                     turnOffOverlaySafely(context)
                 } else {
-                    // 自动开启开关关闭，只设置状态不关闭遮罩
-                    setDefaultActive(context, false)
+                    setDefaultActive(context, false, "main")
+                    setDefaultActive(context, false, "secondary")
                     android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置状态不关闭遮罩")
                 }
                 return
@@ -327,24 +560,18 @@ object ConfigRepository {
             
             val group = getGroupByPackageName(packageName)
             if (group != null) {
-                val defaultConfig = getGroupDefaultConfig(group.groupName)
+                val defaultConfig = getGroupDefaultConfig(group.id)
                 if (defaultConfig != null) {
                     // 始终切换为组默认遮罩（不管自动开启开关是否开启）
                     android.util.Log.d("ConfigRepository", "切换到组默认遮罩: ${group.groupName}")
                     lastOperationTime = currentTime
-                    switchToGroupDefault(context, group.groupName, defaultConfig)
+                    switchToGroupDefault(context, group.id, defaultConfig)
                 }
                 
                 // 启动悬浮球服务（如果启用）
                 if (isFloatingBallEnabled(context)) {
                     try {
-                        val floatingBallIntent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
-                        floatingBallIntent.putExtra("packageName", packageName)
-                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                            context.startForegroundService(floatingBallIntent)
-                        } else {
-                            context.startService(floatingBallIntent)
-                        }
+                        com.example.imageoverlay.util.FloatingBallLauncher.start(context, packageName)
                         android.util.Log.d("ConfigRepository", "启动悬浮球服务: $packageName")
                     } catch (e: Exception) {
                         android.util.Log.e("ConfigRepository", "启动悬浮球服务失败", e)
@@ -353,27 +580,11 @@ object ConfigRepository {
                     android.util.Log.d("ConfigRepository", "悬浮球功能已禁用，跳过启动")
                 }
             } else {
-                // 没有绑定组的应用，停止悬浮球服务
-                try {
-                    val floatingBallIntent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
-                    context.stopService(floatingBallIntent)
-                    android.util.Log.d("ConfigRepository", "停止悬浮球服务: $packageName")
-                } catch (e: Exception) {
-                    android.util.Log.e("ConfigRepository", "停止悬浮球服务失败", e)
-                }
-                
-                android.util.Log.d("ConfigRepository", "应用 $packageName 未绑定组")
-                lastOperationTime = currentTime
-                
-                // 根据自动开启开关决定是否关闭遮罩
-                if (isAutoStartOverlayEnabled(context)) {
-                    // 自动开启开关开启，关闭遮罩
-                    turnOffOverlaySafely(context)
-                } else {
-                    // 自动开启开关关闭，只设置状态不关闭遮罩
-                    setDefaultActive(context, false)
-                    android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置状态不关闭遮罩")
-                }
+                // 输入法、系统弹窗等短暂前台不应关掉绑定应用上的遮罩/悬浮球
+                android.util.Log.d(
+                    "ConfigRepository",
+                    "忽略非绑定应用前台事件: $packageName"
+                )
             }
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "处理应用启动事件失败: $packageName", e)
@@ -388,32 +599,26 @@ object ConfigRepository {
             android.util.Log.d("ConfigRepository", "服务正在启动或停止中，跳过关闭操作")
             return
         }
-        
-        // 检查当前是否真的有遮罩在运行
-        if (!isDefaultActive(context)) {
+
+        if (!OverlayService.hasAnyOverlayRunning() &&
+            !isDefaultActive(context, "main") &&
+            !isDefaultActive(context, "secondary")
+        ) {
             android.util.Log.d("ConfigRepository", "当前没有遮罩运行，跳过关闭操作")
             return
         }
-        
+
         try {
             isServiceStopping = true
-            android.util.Log.d("ConfigRepository", "开始安全关闭遮罩")
-            
-            // 停止遮罩服务
-            val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
-            context.stopService(stopIntent)
-            setDefaultActive(context, false)
-            
-            // 等待服务完全停止
+            android.util.Log.d("ConfigRepository", "开始安全关闭全部遮罩")
+
+            OverlayService.stopAll(context)
+            setDefaultActive(context, false, "main")
+            setDefaultActive(context, false, "secondary")
+
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                try {
-                    android.util.Log.d("ConfigRepository", "遮罩已安全关闭")
-                } catch (e: Exception) {
-                    android.util.Log.e("ConfigRepository", "关闭遮罩后处理失败", e)
-                } finally {
-                    isServiceStopping = false
-                }
-            }, 500) // 增加到500毫秒延迟确保服务完全停止
+                isServiceStopping = false
+            }, 500)
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "安全关闭遮罩失败", e)
             isServiceStopping = false
@@ -423,29 +628,28 @@ object ConfigRepository {
      /**
       * 切换到组默认遮罩，根据自动开启开关决定是否显示
       */
-     private fun switchToGroupDefault(context: Context, groupName: String, defaultConfig: com.example.imageoverlay.model.Config) {
+     private fun switchToGroupDefault(context: Context, groupId: String, defaultConfig: com.example.imageoverlay.model.Config) {
          try {
              // 检查当前是否已经有相同的遮罩在运行
-             val currentDefaultConfig = getDefaultConfig(context)
-             val isSameConfig = currentDefaultConfig?.imageUri == defaultConfig.imageUri && isDefaultActive(context)
-             
-             if (isSameConfig) {
-                 android.util.Log.d("ConfigRepository", "相同配置已运行，跳过切换: ${groupName}/${defaultConfig.configName}")
+             val targetGroup = findGroupById(groupId)
+             val screenType = targetGroup?.screenType ?: "main"
+             val currentDefaultConfig = getDefaultConfig(context, screenType)
+             val isSameConfig = currentDefaultConfig?.imageUri == defaultConfig.imageUri &&
+                     isDefaultActive(context, screenType)
+
+             if (isSameConfig && isOverlayRunningForScreenType(context, screenType)) {
+                 android.util.Log.d("ConfigRepository", "相同配置已运行，跳过切换: ${groupId}/${defaultConfig.configName}")
                  return
              }
-             
-             // 1. 先切换默认遮罩配置（独立逻辑）
-             switchDefaultConfig(context, groupName, defaultConfig)
-             
-             // 2. 根据自动开启开关决定是否显示遮罩
+
+             switchDefaultConfig(context, groupId, defaultConfig)
+
              if (isAutoStartOverlayEnabled(context)) {
-                 // 自动开启开关开启，启动遮罩
                  if (!isServiceStarting) {
-                     turnOnOverlaySafely(context)
+                     autoStartOverlaysForBoundApp(context, screenType)
                  }
              } else {
-                 // 自动开启开关关闭，只设置配置不启动遮罩
-                 setDefaultActive(context, false)
+                 setDefaultActive(context, false, screenType)
                  android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置配置不启动遮罩")
              }
          } catch (e: Exception) {
@@ -456,26 +660,23 @@ object ConfigRepository {
      /**
       * 切换默认遮罩配置（独立逻辑）
       */
-     fun switchDefaultConfig(context: Context, groupName: String, defaultConfig: com.example.imageoverlay.model.Config) {
+     fun switchDefaultConfig(context: Context, groupId: String, defaultConfig: com.example.imageoverlay.model.Config) {
          try {
-             // 1. 清除所有组的激活状态
-             groupList.forEach { group ->
-                 group.configs.forEach { config -> config.active = false }
-             }
+             // 1. 只清除同屏类型的激活状态（主屏副屏独立）
+             val targetGroup = findGroupById(groupId)
+             clearActiveConfigsForScreenType(targetGroup?.screenType ?: "main")
              
              // 2. 激活当前组的默认配置
-             val currentGroup = groupList.find { it.groupName == groupName }
-             currentGroup?.let { group ->
+             targetGroup?.let { group ->
                  val targetConfig = group.configs.find { it.configName == defaultConfig.configName }
                  targetConfig?.active = true
-                 android.util.Log.d("ConfigRepository", "激活组配置: ${groupName}/${defaultConfig.configName}")
+                 android.util.Log.d("ConfigRepository", "激活组配置: ${groupId}/${defaultConfig.configName}")
              }
              
-             // 3. 设置为全局默认遮罩
-             setDefaultConfig(context, groupName, defaultConfig)
-             android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupName}/${defaultConfig.configName}")
+             val screenType = targetGroup?.screenType ?: "main"
+             setDefaultConfig(context, groupId, defaultConfig, screenType)
+             android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupId}/${defaultConfig.configName}")
              
-             // 4. 保存配置
              save(context)
          } catch (e: Exception) {
              android.util.Log.e("ConfigRepository", "切换默认遮罩配置失败", e)
@@ -485,24 +686,20 @@ object ConfigRepository {
      /**
       * 同步更新组配置状态，确保手动切换和自动切换状态一致
       */
-     fun syncGroupConfigStates(context: Context, groupName: String, defaultConfig: com.example.imageoverlay.model.Config) {
+     fun syncGroupConfigStates(context: Context, groupId: String, defaultConfig: com.example.imageoverlay.model.Config) {
          try {
-             // 1. 清除所有组的激活状态
-             groupList.forEach { group ->
-                 group.configs.forEach { config -> config.active = false }
-             }
+             val targetGroup = findGroupById(groupId)
+             clearActiveConfigsForScreenType(targetGroup?.screenType ?: "main")
              
-             // 2. 激活当前组的默认配置
-             val currentGroup = groupList.find { it.groupName == groupName }
-             currentGroup?.let { group ->
+             targetGroup?.let { group ->
                  val targetConfig = group.configs.find { it.configName == defaultConfig.configName }
                  targetConfig?.active = true
-                 android.util.Log.d("ConfigRepository", "激活组配置: ${groupName}/${defaultConfig.configName}")
+                 android.util.Log.d("ConfigRepository", "激活组配置: ${groupId}/${defaultConfig.configName}")
              }
              
-             // 3. 设置为全局默认遮罩
-             setDefaultConfig(context, groupName, defaultConfig)
-             android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupName}/${defaultConfig.configName}")
+             val screenType = targetGroup?.screenType ?: "main"
+             setDefaultConfig(context, groupId, defaultConfig, screenType)
+             android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupId}/${defaultConfig.configName}")
              
              // 4. 保存配置
              save(context)
@@ -513,63 +710,37 @@ object ConfigRepository {
      
     
      /**
-      * 安全地开启遮罩，确保之前的遮罩完全关闭后再开启新的
+      * 应用绑定时自动开启：先开绑定组所在屏，双屏时再开另一块屏（若有可用配置）
       */
-     private fun turnOnOverlaySafely(context: Context) {
+     private fun autoStartOverlaysForBoundApp(context: Context, primaryScreenType: String) {
          if (isServiceStarting || isServiceStopping) {
-             android.util.Log.d("ConfigRepository", "服务正在启动或停止中，跳过开启操作")
+             android.util.Log.d("ConfigRepository", "服务正在启动或停止中，跳过自动开启")
              return
          }
-         
-         // 获取当前默认配置
-         val defaultConfig = getDefaultConfig(context)
-         if (defaultConfig == null || defaultConfig.imageUri.isBlank()) {
-             android.util.Log.w("ConfigRepository", "默认配置为空，跳过开启操作")
-             return
-         }
-         
          try {
              isServiceStarting = true
-             android.util.Log.d("ConfigRepository", "开始安全开启遮罩: ${defaultConfig.configName}")
-             
-             // 第一步：先关闭当前遮罩服务
-             try {
-                 val stopIntent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
-                 context.stopService(stopIntent)
-                 android.util.Log.d("ConfigRepository", "已停止当前遮罩服务")
-             } catch (e: Exception) {
-                 android.util.Log.e("ConfigRepository", "停止遮罩服务失败", e)
-             }
-             
-             // 第二步：延迟启动新的遮罩服务
-             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                 try {
-                     // 再次检查服务状态，防止重复启动
-                     if (isServiceStarting && !isServiceStopping) {
-                         // 激活遮罩
-                         setDefaultActive(context, true)
-                         
-                         // 启动遮罩服务
-                         val intent = android.content.Intent(context, com.example.imageoverlay.OverlayService::class.java)
-                         intent.putExtra("imageUri", defaultConfig.imageUri)
-                         intent.putExtra("opacity", getDefaultOpacity(context))
-                         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                             context.startForegroundService(intent)
-                         } else {
-                             context.startService(intent)
+             com.example.imageoverlay.util.OverlayToggler.turnOnOverlayForScreenType(
+                 context,
+                 primaryScreenType
+             )
+             if (com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
+                 val otherScreen = if (primaryScreenType == "main") "secondary" else "main"
+                 if (resolveOverlayConfigForScreenType(context, otherScreen) != null) {
+                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                         try {
+                             com.example.imageoverlay.util.OverlayToggler.turnOnOverlayForScreenType(
+                                 context,
+                                 otherScreen
+                             )
+                         } catch (e: Exception) {
+                             android.util.Log.e("ConfigRepository", "自动开启副屏遮罩失败", e)
                          }
-                         android.util.Log.d("ConfigRepository", "已启动新的遮罩服务")
-                     } else {
-                         android.util.Log.d("ConfigRepository", "服务状态已改变，取消启动")
-                     }
-                 } catch (e: Exception) {
-                     android.util.Log.e("ConfigRepository", "启动遮罩服务失败", e)
-                 } finally {
-                     isServiceStarting = false
+                     }, 150)
                  }
-             }, 500) // 增加到500毫秒延迟启动新服务，确保之前的服务完全停止
+             }
          } catch (e: Exception) {
-             android.util.Log.e("ConfigRepository", "安全开启遮罩失败", e)
+             android.util.Log.e("ConfigRepository", "自动开启遮罩失败", e)
+         } finally {
              isServiceStarting = false
          }
      }
@@ -670,9 +841,7 @@ object ConfigRepository {
      * 检查按键是否与已绑定的其他功能冲突。
      */
     fun checkKeyConflictForFunction(context: Context, keyCode: Int, currentFunction: String): Boolean {
-        val functionKeys = listOf("toggle_overlay", "next_image", "previous_image", "increase_opacity", "decrease_opacity")
-        
-        for (funcKey in functionKeys) {
+        for (funcKey in getKeyBindingFunctionKeys(context)) {
             if (funcKey != currentFunction) {
                 val boundKeys = getBoundHardwareKeysForFunction(context, funcKey)
                 if (boundKeys.contains(keyCode)) {
@@ -687,7 +856,7 @@ object ConfigRepository {
      * 获取所有功能绑定的按键（用于冲突检测）。
      */
     fun getAllBoundKeys(context: Context): Map<String, List<Int>> {
-        val functionKeys = listOf("toggle_overlay", "next_image", "previous_image", "increase_opacity", "decrease_opacity")
+        val functionKeys = getKeyBindingFunctionKeys(context)
         val result = mutableMapOf<String, List<Int>>()
         
         for (funcKey in functionKeys) {
@@ -697,9 +866,11 @@ object ConfigRepository {
     }
 
     fun addGroup(context: Context, group: Group) {
+        if (group.id.isBlank()) {
+            group.id = java.util.UUID.randomUUID().toString()
+        }
         groupList.add(group)
         save(context)
-        load(context)
     }
 
     fun clear(context: Context) {

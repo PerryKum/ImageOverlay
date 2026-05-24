@@ -19,13 +19,13 @@ class AppSelectorActivity : AppCompatActivity() {
     private lateinit var recyclerView: RecyclerView
     private lateinit var adapter: AppAdapter
     private var appList: List<AppInfo> = listOf()
-    private var groupName: String = ""
+    private var groupId: String = ""
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_app_selector)
         
-        groupName = intent.getStringExtra("group_name") ?: ""
+        groupId = intent.getStringExtra("group_id") ?: ""
         title = "选择要绑定的应用"
         
         recyclerView = findViewById(R.id.recyclerViewApps)
@@ -35,7 +35,7 @@ class AppSelectorActivity : AppCompatActivity() {
         
         adapter = AppAdapter(appList) { appInfo ->
             // 绑定应用到组
-            ConfigRepository.bindAppToGroup(groupName, appInfo.packageName)
+            ConfigRepository.bindAppToGroup(groupId, appInfo.packageName)
             ConfigRepository.save(this)
             
             setResult(Activity.RESULT_OK, Intent().apply {

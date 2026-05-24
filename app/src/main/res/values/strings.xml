@@ -9,9 +9,21 @@
     <string name="tab_settings">设置</string>
     <string name="tile_default_toggle">默认遮罩</string>
     <string name="tile_settings">磁贴设置</string>
-    <string name="toggle_overlay">开关遮罩</string>
+    <string name="toggle_overlay">开启/关闭遮罩</string>
+    <string name="key_bind_overlay_main">开启/关闭主屏遮罩</string>
+    <string name="key_bind_overlay_secondary">开启/关闭副屏遮罩</string>
+    <string name="key_bind_floating_ball">显示/隐藏悬浮球</string>
     <string name="adjust_opacity">调整透明度</string>
     <string name="cancel">取消</string>
     <string name="apply">应用</string>
+    <string name="tab_secondary_display">副屏配置</string>
     <string name="accessibility_keybinding_desc">监听实体按键以切换遮罩开关。需要开启无障碍服务权限。</string>
+    <string name="floating_ball_icon_desc">遮罩悬浮球</string>
+    <string name="floating_ball_expand_desc">展开悬浮球</string>
+    <string name="quick_use_screen_main">主屏</string>
+    <string name="quick_use_screen_secondary">副屏</string>
+    <string name="quick_use_preset_active_main">请先关闭主屏预设配置</string>
+    <string name="quick_use_preset_active_secondary">请先关闭副屏预设配置</string>
+    <string name="floating_ball_enabled">已开启悬浮球</string>
+    <string name="floating_ball_disabled">已关闭悬浮球</string>
 </resources> 
