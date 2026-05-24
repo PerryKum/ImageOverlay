@@ -233,9 +233,15 @@ object ConfigRepository {
     private fun hasValidSafPermission(context: Context, uri: Uri): Boolean {
         return try {
             val docFile = androidx.documentfile.provider.DocumentFile.fromTreeUri(context, uri)
-            if (docFile?.exists() == true && docFile.isDirectory) {
+            if (docFile != null && docFile.exists() && docFile.isDirectory) {
+                try {
+                    docFile.listFiles()
+                } catch (e: Exception) {
+                    android.util.Log.w("ConfigRepository", "SAF listFiles 失败，目录仍可访问", e)
+                }
                 return true
             }
+            android.util.Log.w("ConfigRepository", "SAF目录暂时不可访问，尝试持久化权限校验")
             val flags = context.contentResolver.getPersistedUriPermissions()
             flags.any { permission ->
                 urisMatch(permission.uri, uri) &&
