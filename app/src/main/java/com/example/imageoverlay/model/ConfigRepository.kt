@@ -644,6 +644,58 @@ object ConfigRepository {
         return getBoundHardwareKeys(context).contains(keyCode)
     }
 
+    // ============ 功能特定的按键绑定 ============
+    /**
+     * 为特定功能保存绑定的实体按键，最多3个。
+     */
+    fun setBoundHardwareKeysForFunction(context: Context, functionKey: String, keyCodes: List<Int>) {
+        val sanitized = keyCodes.distinct().take(3)
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        sp.edit().putString("bound_keys_$functionKey", sanitized.joinToString(",")).apply()
+    }
+
+    /**
+     * 读取特定功能绑定的实体按键列表。
+     */
+    fun getBoundHardwareKeysForFunction(context: Context, functionKey: String): List<Int> {
+        val sp = context.getSharedPreferences(PREF_SETTINGS, Context.MODE_PRIVATE)
+        val raw = sp.getString("bound_keys_$functionKey", "") ?: ""
+        if (raw.isBlank()) return emptyList()
+        return raw.split(',').mapNotNull {
+            try { it.trim().toInt() } catch (_: Exception) { null }
+        }.distinct().take(3)
+    }
+
+    /**
+     * 检查按键是否与已绑定的其他功能冲突。
+     */
+    fun checkKeyConflictForFunction(context: Context, keyCode: Int, currentFunction: String): Boolean {
+        val functionKeys = listOf("toggle_overlay", "next_image", "previous_image", "increase_opacity", "decrease_opacity")
+        
+        for (funcKey in functionKeys) {
+            if (funcKey != currentFunction) {
+                val boundKeys = getBoundHardwareKeysForFunction(context, funcKey)
+                if (boundKeys.contains(keyCode)) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * 获取所有功能绑定的按键（用于冲突检测）。
+     */
+    fun getAllBoundKeys(context: Context): Map<String, List<Int>> {
+        val functionKeys = listOf("toggle_overlay", "next_image", "previous_image", "increase_opacity", "decrease_opacity")
+        val result = mutableMapOf<String, List<Int>>()
+        
+        for (funcKey in functionKeys) {
+            result[funcKey] = getBoundHardwareKeysForFunction(context, funcKey)
+        }
+        return result
+    }
+
     fun addGroup(context: Context, group: Group) {
         groupList.add(group)
         save(context)

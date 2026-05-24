@@ -97,4 +97,110 @@ object OverlayToggler {
     fun isOverlayActive(context: Context): Boolean {
         return ConfigRepository.isDefaultActive(context)
     }
+    
+    /**
+     * 切换到下一张图片
+     */
+    fun switchToNextImage(context: Context) {
+        try {
+            val groups = ConfigRepository.getGroups()
+            if (groups.isEmpty()) return
+            
+            val currentGroup = groups.find { it.configs.any { config -> config.active } }
+            val currentConfig = currentGroup?.configs?.find { it.active }
+            
+            if (currentGroup != null && currentConfig != null) {
+                val configs = currentGroup.configs
+                val currentIndex = configs.indexOf(currentConfig)
+                val nextIndex = (currentIndex + 1) % configs.size
+                val nextConfig = configs[nextIndex]
+                
+                // 停止当前遮罩
+                val stopIntent = Intent(context, OverlayService::class.java)
+                context.stopService(stopIntent)
+                
+                // 启动新的遮罩
+                val intent = Intent(context, OverlayService::class.java)
+                intent.putExtra("imageUri", nextConfig.imageUri)
+                intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(context))
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                
+                // 更新激活状态
+                configs.forEach { it.active = false }
+                nextConfig.active = true
+                ConfigRepository.save(context)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayToggler", "切换到下一张图片失败", e)
+        }
+    }
+    
+    /**
+     * 切换到上一张图片
+     */
+    fun switchToPreviousImage(context: Context) {
+        try {
+            val groups = ConfigRepository.getGroups()
+            if (groups.isEmpty()) return
+            
+            val currentGroup = groups.find { it.configs.any { config -> config.active } }
+            val currentConfig = currentGroup?.configs?.find { it.active }
+            
+            if (currentGroup != null && currentConfig != null) {
+                val configs = currentGroup.configs
+                val currentIndex = configs.indexOf(currentConfig)
+                val previousIndex = if (currentIndex - 1 < 0) configs.size - 1 else currentIndex - 1
+                val previousConfig = configs[previousIndex]
+                
+                // 停止当前遮罩
+                val stopIntent = Intent(context, OverlayService::class.java)
+                context.stopService(stopIntent)
+                
+                // 启动新的遮罩
+                val intent = Intent(context, OverlayService::class.java)
+                intent.putExtra("imageUri", previousConfig.imageUri)
+                intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(context))
+                
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+                
+                // 更新激活状态
+                configs.forEach { it.active = false }
+                previousConfig.active = true
+                ConfigRepository.save(context)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayToggler", "切换到上一张图片失败", e)
+        }
+    }
+    
+    /**
+     * 调整透明度
+     * @param delta 透明度变化值，正数增加，负数减少
+     */
+    fun adjustOpacity(context: Context, delta: Float) {
+        try {
+            val currentOpacity = ConfigRepository.getDefaultOpacity(context)
+            val newOpacity = (currentOpacity + delta).coerceIn(0.1f, 1.0f)
+            ConfigRepository.setDefaultOpacity(context, (newOpacity * 100).toInt())
+            
+            // 如果遮罩正在运行，更新其透明度
+            if (ConfigRepository.isDefaultActive(context)) {
+                val intent = Intent(context, OverlayService::class.java)
+                intent.putExtra("action", "update_opacity")
+                intent.putExtra("opacity", newOpacity)
+                context.startService(intent)
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayToggler", "调整透明度失败", e)
+        }
+    }
 }

@@ -33,6 +33,11 @@
             android:exported="false"
             android:theme="@style/Theme.ImageOverlay" />
             
+        <activity
+            android:name=".keybinding.KeyBindingActivity"
+            android:exported="false"
+            android:theme="@style/Theme.ImageOverlay" />
+            
         <service
             android:name=".OverlayService"
             android:exported="false"
@@ -72,4 +77,4 @@
         </service>
     </application>
 
-</manifest> 
+</manifest>

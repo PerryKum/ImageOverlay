@@ -41,22 +41,38 @@ class KeyBindingService : AccessibilityService() {
             return super.onKeyEvent(event)
         }
 
-        val boundKeys = ConfigRepository.getBoundHardwareKeys(this)
-        if (boundKeys.isEmpty()) return super.onKeyEvent(event)
-
         when (event.action) {
             KeyEvent.ACTION_DOWN -> pressedKeys.add(event.keyCode)
             KeyEvent.ACTION_UP -> pressedKeys.remove(event.keyCode)
         }
 
-        // 简化逻辑：当按下事件发生时，若当前按下集合包含所有绑定键，则触发切换
+        // 检查各个功能的按键绑定
         if (event.action == KeyEvent.ACTION_DOWN) {
-            val matches = boundKeys.all { pressedKeys.contains(it) }
-            if (matches) {
+            // 检查遮罩开关
+            val overlayBoundKeys = ConfigRepository.getBoundHardwareKeysForFunction(this, "toggle_overlay")
+            if (overlayBoundKeys.isNotEmpty() && overlayBoundKeys.all { pressedKeys.contains(it) }) {
                 toggleOverlay()
-                // 防止重复触发：清空一次状态
                 pressedKeys.clear()
                 return true
+            }
+            
+            // 检查悬浮球开关
+            val floatingBallBoundKeys = ConfigRepository.getBoundHardwareKeysForFunction(this, "toggle_floating_ball")
+            if (floatingBallBoundKeys.isNotEmpty() && floatingBallBoundKeys.all { pressedKeys.contains(it) }) {
+                toggleFloatingBall()
+                pressedKeys.clear()
+                return true
+            }
+            
+            // 检查其他功能
+            val functions = listOf("next_image", "previous_image", "increase_opacity", "decrease_opacity")
+            for (function in functions) {
+                val boundKeys = ConfigRepository.getBoundHardwareKeysForFunction(this, function)
+                if (boundKeys.isNotEmpty() && boundKeys.all { pressedKeys.contains(it) }) {
+                    handleFunction(function)
+                    pressedKeys.clear()
+                    return true
+                }
             }
         }
         return super.onKeyEvent(event)
@@ -67,6 +83,57 @@ class KeyBindingService : AccessibilityService() {
             OverlayToggler.toggleDefaultOverlay(this)
         } catch (e: Exception) {
             android.util.Log.e("KeyBindingService", "切换遮罩失败", e)
+        }
+    }
+    
+    private fun toggleFloatingBall() {
+        try {
+            val context = this
+            val isEnabled = com.example.imageoverlay.model.ConfigRepository.isFloatingBallEnabled(context)
+            com.example.imageoverlay.model.ConfigRepository.setFloatingBallEnabled(context, !isEnabled)
+            
+            if (!isEnabled) {
+                // 开启悬浮球
+                val intent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            } else {
+                // 关闭悬浮球
+                val intent = android.content.Intent(context, com.example.imageoverlay.FloatingBallService::class.java)
+                context.stopService(intent)
+            }
+            
+            android.util.Log.d("KeyBindingService", "悬浮球开关已切换：${if (!isEnabled) "开启" else "关闭"}")
+        } catch (e: Exception) {
+            android.util.Log.e("KeyBindingService", "切换悬浮球失败", e)
+        }
+    }
+    
+    private fun handleFunction(function: String) {
+        try {
+            when (function) {
+                "next_image" -> {
+                    // 切换到下一张图片
+                    com.example.imageoverlay.util.OverlayToggler.switchToNextImage(this)
+                }
+                "previous_image" -> {
+                    // 切换到上一张图片
+                    com.example.imageoverlay.util.OverlayToggler.switchToPreviousImage(this)
+                }
+                "increase_opacity" -> {
+                    // 增加透明度
+                    com.example.imageoverlay.util.OverlayToggler.adjustOpacity(this, 0.1f)
+                }
+                "decrease_opacity" -> {
+                    // 减少透明度
+                    com.example.imageoverlay.util.OverlayToggler.adjustOpacity(this, -0.1f)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("KeyBindingService", "执行功能 $function 失败", e)
         }
     }
 }

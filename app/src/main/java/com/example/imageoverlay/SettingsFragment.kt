@@ -56,7 +56,10 @@ class SettingsFragment : Fragment() {
                 // 进入运行条件检测页面
                 startActivity(android.content.Intent(requireContext(), RequirementsActivity::class.java))
             },
-            SettingItem.TextItem("绑定实体按键", getBoundKeysSummary()) { showKeyBindingDialog() },
+            SettingItem.TextItem("绑定实体按键", getBoundKeysSummary()) { 
+                    val intent = android.content.Intent(requireContext(), KeyBindingActivity::class.java)
+                    startActivity(intent)
+                },
             SettingItem.SwitchItem(
                 "自动开启/关闭遮罩", 
                 "启动绑定组的软件时自动开启对应遮罩，离开时自动关闭", 
@@ -507,4 +510,4 @@ class SettingsAdapter(
     }
 
     override fun getItemCount(): Int = items.size
-} 
+}
