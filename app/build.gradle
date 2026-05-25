@@ -11,8 +11,8 @@ android {
         applicationId "com.example.imageoverlay"
         minSdk 23
         targetSdk 34
-        versionCode 50
-        versionName "5.0.0(revolution)"
+        versionCode 51
+        versionName "5.0.1-revolution-debug"
     }
 
     compileOptions {

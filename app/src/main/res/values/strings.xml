@@ -26,4 +26,8 @@
     <string name="quick_use_preset_active_secondary">请先关闭副屏预设配置</string>
     <string name="floating_ball_enabled">已开启悬浮球</string>
     <string name="floating_ball_disabled">已关闭悬浮球</string>
+    <string name="floating_ball_foreground_app">前台应用：%1$s\n%2$s</string>
+    <string name="floating_ball_no_bound_groups">当前屏无绑定到该应用的配置组</string>
+    <string name="floating_ball_tab_main">主屏</string>
+    <string name="floating_ball_tab_secondary">副屏</string>
 </resources> 

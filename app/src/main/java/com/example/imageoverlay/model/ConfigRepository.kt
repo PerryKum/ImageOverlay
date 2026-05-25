@@ -487,14 +487,22 @@ object ConfigRepository {
 
     // 新增：设置组的默认遮罩
     fun setGroupDefaultConfig(groupId: String, configName: String) {
-        val group = findGroupById(groupId)
-        group?.let {
-            // 清除其他配置的默认标记
-            it.configs.forEach { config -> config.isDefault = false }
-            // 设置指定配置为默认
-            it.configs.find { config -> config.configName == configName }?.isDefault = true
-            it.defaultConfigName = configName
+        val group = findGroupById(groupId) ?: return
+
+        // 同包名其它组：先去掉其「组内默认」标记（避免多组绑同一应用时默认配置冲突）
+        val packageName = group.boundPackageName
+        if (!packageName.isNullOrBlank()) {
+            groupList.forEach { other ->
+                if (other.id != groupId && other.boundPackageName == packageName) {
+                    other.configs.forEach { config -> config.isDefault = false }
+                    other.defaultConfigName = null
+                }
+            }
         }
+
+        group.configs.forEach { config -> config.isDefault = false }
+        group.configs.find { config -> config.configName == configName }?.isDefault = true
+        group.defaultConfigName = configName
     }
 
     // 新增：获取组的默认遮罩
@@ -515,9 +523,32 @@ object ConfigRepository {
         group?.boundPackageName = null
     }
 
-    // 新增：根据包名获取绑定的组
+    /** 该包名绑定的全部组（主屏/副屏可各有一个） */
+    fun getGroupsByPackageName(packageName: String): List<Group> {
+        return groupList.filter { it.boundPackageName == packageName }
+    }
+
+    fun hasBoundGroupForPackage(packageName: String): Boolean {
+        return getGroupsByPackageName(packageName).isNotEmpty()
+    }
+
+    /** 该包名在指定屏类型上绑定的全部组（与自动开启、悬浮球数据源一致） */
+    fun getBoundGroupsForScreenType(packageName: String, screenType: String): List<Group> {
+        return groupList.filter {
+            it.boundPackageName == packageName &&
+                it.screenType == screenType &&
+                it.groupName != "默认配置"
+        }
+    }
+
+    /** 该包名在指定屏类型上绑定的组（同屏多个时取列表中第一个） */
+    fun getBoundGroupForScreenType(packageName: String, screenType: String): Group? {
+        return getBoundGroupsForScreenType(packageName, screenType).firstOrNull()
+    }
+
+    // 兼容：返回该包名绑定的第一个组
     fun getGroupByPackageName(packageName: String): Group? {
-        return groupList.find { it.boundPackageName == packageName }
+        return getGroupsByPackageName(packageName).firstOrNull()
     }
 
     // 新增：处理应用启动事件
@@ -564,18 +595,23 @@ object ConfigRepository {
                 return
             }
             
-            val group = getGroupByPackageName(packageName)
-            if (group != null) {
-                val defaultConfig = getGroupDefaultConfig(group.id)
-                if (defaultConfig != null) {
-                    // 始终切换为组默认遮罩（不管自动开启开关是否开启）
-                    android.util.Log.d("ConfigRepository", "切换到组默认遮罩: ${group.groupName}")
-                    lastOperationTime = currentTime
-                    switchToGroupDefault(context, group.id, defaultConfig)
-                }
-                
-                // 启动悬浮球服务（如果启用）
-                if (isFloatingBallEnabled(context)) {
+            if (!hasBoundGroupForPackage(packageName)) {
+                android.util.Log.d(
+                    "ConfigRepository",
+                    "忽略非绑定应用前台事件: $packageName"
+                )
+                return
+            }
+
+            lastOperationTime = currentTime
+            applyBoundDefaultConfigsForPackage(context, packageName)
+
+            if (isAutoStartOverlayEnabled(context) && !isServiceStarting) {
+                autoStartOverlaysForBoundPackage(context, packageName)
+            }
+
+            // 启动悬浮球服务（如果启用）
+            if (isFloatingBallEnabled(context)) {
                     try {
                         com.example.imageoverlay.util.FloatingBallLauncher.start(context, packageName)
                         android.util.Log.d("ConfigRepository", "启动悬浮球服务: $packageName")
@@ -585,13 +621,6 @@ object ConfigRepository {
                 } else {
                     android.util.Log.d("ConfigRepository", "悬浮球功能已禁用，跳过启动")
                 }
-            } else {
-                // 输入法、系统弹窗等短暂前台不应关掉绑定应用上的遮罩/悬浮球
-                android.util.Log.d(
-                    "ConfigRepository",
-                    "忽略非绑定应用前台事件: $packageName"
-                )
-            }
         } catch (e: Exception) {
             android.util.Log.e("ConfigRepository", "处理应用启动事件失败: $packageName", e)
         }
@@ -631,37 +660,23 @@ object ConfigRepository {
         }
     }
     
-     /**
-      * 切换到组默认遮罩，根据自动开启开关决定是否显示
-      */
-     private fun switchToGroupDefault(context: Context, groupId: String, defaultConfig: com.example.imageoverlay.model.Config) {
-         try {
-             // 检查当前是否已经有相同的遮罩在运行
-             val targetGroup = findGroupById(groupId)
-             val screenType = targetGroup?.screenType ?: "main"
-             val currentDefaultConfig = getDefaultConfig(context, screenType)
-             val isSameConfig = currentDefaultConfig?.imageUri == defaultConfig.imageUri &&
-                     isDefaultActive(context, screenType)
-
-             if (isSameConfig && isOverlayRunningForScreenType(context, screenType)) {
-                 android.util.Log.d("ConfigRepository", "相同配置已运行，跳过切换: ${groupId}/${defaultConfig.configName}")
-                 return
-             }
-
-             switchDefaultConfig(context, groupId, defaultConfig)
-
-             if (isAutoStartOverlayEnabled(context)) {
-                 if (!isServiceStarting) {
-                     autoStartOverlaysForBoundApp(context, screenType)
-                 }
-             } else {
-                 setDefaultActive(context, false, screenType)
-                 android.util.Log.d("ConfigRepository", "自动开启开关关闭，只设置配置不启动遮罩")
-             }
-         } catch (e: Exception) {
-             android.util.Log.e("ConfigRepository", "切换到组默认遮罩失败", e)
+     /** 前台包名：按主/副屏分别切换为该包绑定组的默认配置（不启动遮罩、不碰其它屏） */
+     private fun applyBoundDefaultConfigsForPackage(context: Context, packageName: String) {
+         val screenTypes = mutableListOf("main")
+         if (com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
+             screenTypes.add("secondary")
+         }
+         for (screenType in screenTypes) {
+             val group = getBoundGroupForScreenType(packageName, screenType) ?: continue
+             val defaultConfig = getGroupDefaultConfig(group.id) ?: continue
+             switchDefaultConfig(context, group.id, defaultConfig)
+             android.util.Log.d(
+                 "ConfigRepository",
+                 "已切换绑定组默认配置: $packageName / ${group.groupName} / $screenType"
+             )
          }
      }
+
      
      /**
       * 切换默认遮罩配置（独立逻辑）
@@ -716,39 +731,56 @@ object ConfigRepository {
      
     
      /**
-      * 应用绑定时自动开启：先开绑定组所在屏，双屏时再开另一块屏（若有可用配置）
+      * 自动开启：按前台包名分别检查主/副屏绑定组，有默认配置则只开对应屏，主副互不影响。
       */
-     private fun autoStartOverlaysForBoundApp(context: Context, primaryScreenType: String) {
+     private fun autoStartOverlaysForBoundPackage(context: Context, packageName: String) {
          if (isServiceStarting || isServiceStopping) {
              android.util.Log.d("ConfigRepository", "服务正在启动或停止中，跳过自动开启")
              return
          }
          try {
              isServiceStarting = true
-             com.example.imageoverlay.util.OverlayToggler.turnOnOverlayForScreenType(
-                 context,
-                 primaryScreenType
-             )
+             autoStartBoundOverlayOnScreenType(context, packageName, "main")
              if (com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
-                 val otherScreen = if (primaryScreenType == "main") "secondary" else "main"
-                 if (resolveOverlayConfigForScreenType(context, otherScreen) != null) {
-                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                         try {
-                             com.example.imageoverlay.util.OverlayToggler.turnOnOverlayForScreenType(
-                                 context,
-                                 otherScreen
-                             )
-                         } catch (e: Exception) {
-                             android.util.Log.e("ConfigRepository", "自动开启副屏遮罩失败", e)
-                         }
-                     }, 150)
-                 }
+                 autoStartBoundOverlayOnScreenType(context, packageName, "secondary")
              }
          } catch (e: Exception) {
              android.util.Log.e("ConfigRepository", "自动开启遮罩失败", e)
          } finally {
              isServiceStarting = false
          }
+     }
+
+     private fun autoStartBoundOverlayOnScreenType(
+         context: Context,
+         packageName: String,
+         screenType: String
+     ) {
+         val group = getBoundGroupForScreenType(packageName, screenType) ?: return
+         val defaultConfig = getGroupDefaultConfig(group.id) ?: return
+         if (defaultConfig.imageUri.isBlank()) return
+
+         val currentDefault = getDefaultConfig(context, screenType)
+         val alreadyRunning = currentDefault?.imageUri == defaultConfig.imageUri &&
+             isDefaultActive(context, screenType) &&
+             isOverlayRunningForScreenType(context, screenType)
+         if (alreadyRunning) {
+             android.util.Log.d(
+                 "ConfigRepository",
+                 "自动开启跳过，$screenType 已是相同遮罩: ${group.groupName}"
+             )
+             return
+         }
+
+         com.example.imageoverlay.util.OverlayToggler.turnOnOverlayForBoundGroup(
+             context,
+             group,
+             defaultConfig
+         )
+         android.util.Log.d(
+             "ConfigRepository",
+             "自动开启 $screenType 遮罩: $packageName / ${group.groupName}"
+         )
      }
 
     // 新增：设置自动开启遮罩

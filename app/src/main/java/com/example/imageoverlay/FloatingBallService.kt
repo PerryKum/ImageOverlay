@@ -34,10 +34,9 @@ import android.view.GestureDetector
 import com.example.imageoverlay.model.Config
 import com.example.imageoverlay.model.ConfigRepository
 import com.example.imageoverlay.model.Group
-import com.example.imageoverlay.util.DisplayUtil
 import com.example.imageoverlay.util.AppStateUtil
+import com.example.imageoverlay.util.DisplayUtil
 import com.example.imageoverlay.util.ForegroundAppUtil
-import com.example.imageoverlay.util.LauncherUtil
 import com.example.imageoverlay.util.OverlayToggler
 import com.example.imageoverlay.util.PermissionUtil
 import com.google.android.material.tabs.TabLayout
@@ -47,7 +46,8 @@ class FloatingBallService : Service() {
     private var floatingBallView: View? = null
     private var configPopupView: View? = null
     private var overlayView: View? = null
-    private var currentGroup: Group? = null
+    private var boundPackageName: String? = null
+    private val expandedPopupGroupIds = mutableSetOf<String>()
     private var ballParams: WindowManager.LayoutParams? = null
     private var popupParams: WindowManager.LayoutParams? = null
     
@@ -131,22 +131,20 @@ class FloatingBallService : Service() {
                 return START_NOT_STICKY
             }
 
-            currentGroup = ConfigRepository.getGroupByPackageName(packageName)
-            if (currentGroup == null) {
+            if (!ConfigRepository.hasBoundGroupForPackage(packageName)) {
                 android.util.Log.w("FloatingBallService", "包名未绑定配置组: $packageName")
                 stopSelf()
                 return START_NOT_STICKY
             }
+
+            boundPackageName = packageName
 
             if (floatingBallView != null) {
                 removeFloatingBall()
             }
             showFloatingBall()
             startHomeDetection()
-            android.util.Log.d(
-                "FloatingBallService",
-                "悬浮球已显示 package=$packageName group=${currentGroup?.groupName}"
-            )
+            android.util.Log.d("FloatingBallService", "悬浮球已显示 package=$packageName")
         } catch (e: Exception) {
             android.util.Log.e("FloatingBallService", "onStartCommand异常", e)
             stopSelf()
@@ -618,12 +616,12 @@ class FloatingBallService : Service() {
 
     private fun shouldAutoHideFloatingBall(): Boolean {
         if (AppStateUtil.isInAppActive(applicationContext)) return true
-        val foreground = ForegroundAppUtil.getRecentForegroundPackage(this) ?: return false
+        val foreground = ForegroundAppUtil.getRecentForegroundPackage(this) ?: return true
         if (foreground == applicationContext.packageName) return true
-        val boundPkg = currentGroup?.boundPackageName
-        if (!boundPkg.isNullOrBlank() && foreground == boundPkg) return false
-        if (foreground == "com.android.systemui") return false
-        return LauncherUtil.isLauncherPackage(foreground)
+        val boundPkg = boundPackageName
+        if (boundPkg.isNullOrBlank()) return true
+        if (foreground == boundPkg) return false
+        return true
     }
 
     companion object {
@@ -660,7 +658,8 @@ class FloatingBallService : Service() {
             hideConfigPopup()
 
             if (resetTabToBoundGroup) {
-                popupScreenType = currentGroup?.screenType ?: "main"
+                expandedPopupGroupIds.clear()
+                popupScreenType = "main"
             } else {
                 popupScreenType = previousScreenType
             }
@@ -668,35 +667,12 @@ class FloatingBallService : Service() {
             val inflater = themedInflater()
             configPopupView = inflater.inflate(R.layout.config_popup, null)
 
+            updateForegroundPackageHeader()
+
+            setupConfigPopupTabs(inflater)
+
             val configList = configPopupView?.findViewById<LinearLayout>(R.id.configList)
-            val groupTitle = configPopupView?.findViewById<TextView>(R.id.groupTitle)
-            val tabLayout = configPopupView?.findViewById<TabLayout>(R.id.tabLayout)
-
-            val hasSecondary = DisplayUtil.hasSecondaryDisplay(this)
-
-            if (hasSecondary && tabLayout != null) {
-                styleConfigPopupTabs(tabLayout)
-                tabLayout.visibility = View.VISIBLE
-                tabLayout.clearOnTabSelectedListeners()
-                tabLayout.removeAllTabs()
-                tabLayout.addTab(tabLayout.newTab().setText("主屏"))
-                tabLayout.addTab(tabLayout.newTab().setText("副屏"))
-                tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
-                    override fun onTabSelected(tab: TabLayout.Tab?) {
-                        popupScreenType = if (tab?.position == 1) "secondary" else "main"
-                        refreshConfigPopupList(configList, groupTitle, inflater)
-                    }
-                    override fun onTabUnselected(tab: TabLayout.Tab?) {}
-                    override fun onTabReselected(tab: TabLayout.Tab?) {}
-                })
-                val tabIndex = if (popupScreenType == "secondary") 1 else 0
-                tabLayout.getTabAt(tabIndex)?.select()
-                styleConfigPopupTabs(tabLayout)
-            } else {
-                tabLayout?.visibility = View.GONE
-            }
-
-            refreshConfigPopupList(configList, groupTitle, inflater)
+            refreshConfigPopupList(configList, inflater)
 
             // 设置手动销毁按钮点击事件
             val manualDestroyView = configPopupView?.findViewById<TextView>(R.id.manualDestroy)
@@ -762,73 +738,158 @@ class FloatingBallService : Service() {
         }
     }
     
-    private fun refreshConfigPopupList(
-        configList: LinearLayout?,
-        groupTitle: TextView?,
-        inflater: LayoutInflater
-    ) {
-        configList?.removeAllViews()
-        val groups = ConfigRepository.getGroupsByScreenType(popupScreenType)
-            .filter { it.groupName != "默认配置" }
+    private fun updateForegroundPackageHeader() {
+        val tvPackage = configPopupView?.findViewById<TextView>(R.id.tvForegroundPackage) ?: return
+        tvPackage.visibility = View.VISIBLE
+        val pkg = boundPackageName
+        tvPackage.text = if (pkg.isNullOrBlank()) "" else formatForegroundAppLabel(pkg)
+    }
 
-        if (groups.isEmpty()) {
-            groupTitle?.text = if (popupScreenType == "secondary") "副屏（无配置组）" else "主屏（无配置组）"
+    private fun setupConfigPopupTabs(inflater: LayoutInflater) {
+        val tabLayout = configPopupView?.findViewById<TabLayout>(R.id.tabLayout) ?: return
+        val tvScreenLabel = configPopupView?.findViewById<TextView>(R.id.tvScreenLabel)
+        val hasSecondary = DisplayUtil.hasSecondaryDisplay(this)
+        if (!hasSecondary) {
+            tabLayout.visibility = View.GONE
+            tvScreenLabel?.visibility = View.VISIBLE
+            tvScreenLabel?.text = getString(R.string.floating_ball_tab_main)
+            popupScreenType = "main"
+            updateForegroundPackageHeader()
             return
         }
 
-        if (groups.size == 1) {
-            groupTitle?.text = groups[0].groupName
-        } else {
-            groupTitle?.text = if (popupScreenType == "secondary") "副屏配置" else "主屏配置"
+        tvScreenLabel?.visibility = View.GONE
+        tabLayout.visibility = View.VISIBLE
+        styleConfigPopupTabs(tabLayout)
+        tabLayout.clearOnTabSelectedListeners()
+        tabLayout.removeAllTabs()
+        tabLayout.addTab(tabLayout.newTab().setText(getString(R.string.floating_ball_tab_main)))
+        tabLayout.addTab(tabLayout.newTab().setText(getString(R.string.floating_ball_tab_secondary)))
+        tabLayout.addOnTabSelectedListener(object : TabLayout.OnTabSelectedListener {
+            override fun onTabSelected(tab: TabLayout.Tab?) {
+                popupScreenType = if (tab?.position == 1) "secondary" else "main"
+                updateForegroundPackageHeader()
+                val configList = configPopupView?.findViewById<LinearLayout>(R.id.configList)
+                refreshConfigPopupList(configList, inflater)
+            }
+
+            override fun onTabUnselected(tab: TabLayout.Tab?) {}
+            override fun onTabReselected(tab: TabLayout.Tab?) {}
+        })
+        val tabIndex = if (popupScreenType == "secondary") 1 else 0
+        tabLayout.getTabAt(tabIndex)?.select()
+        styleConfigPopupTabs(tabLayout)
+    }
+
+    private fun formatForegroundAppLabel(packageName: String): String {
+        return try {
+            val label = packageManager.getApplicationLabel(
+                packageManager.getApplicationInfo(packageName, 0)
+            ).toString()
+            getString(R.string.floating_ball_foreground_app, label, packageName)
+        } catch (_: Exception) {
+            getString(R.string.floating_ball_foreground_app, packageName, packageName)
+        }
+    }
+
+    private fun groupExpandKey(group: Group): String =
+        group.id.ifBlank { "${group.groupName}_${group.screenType}" }
+
+    private fun refreshConfigPopupList(configList: LinearLayout?, inflater: LayoutInflater) {
+        configList?.removeAllViews()
+        val pkg = boundPackageName
+        if (pkg.isNullOrBlank()) {
+            return
         }
 
-        for (group in groups) {
-            if (groups.size > 1) {
-                val header = TextView(this).apply {
-                    text = group.groupName
-                    textSize = 14f
-                    setTextColor(ContextCompat.getColor(this@FloatingBallService, android.R.color.white))
-                    setPadding(0, 12, 0, 4)
+        val groups = ConfigRepository.getBoundGroupsForScreenType(pkg, popupScreenType)
+        if (groups.isEmpty()) {
+            configList?.addView(TextView(this).apply {
+                text = getString(R.string.floating_ball_no_bound_groups)
+                textSize = 13f
+                setTextColor(ContextCompat.getColor(this@FloatingBallService, android.R.color.darker_gray))
+                setPadding(8, 8, 8, 8)
+            })
+            return
+        }
+
+        groups.forEach { group ->
+            val expandKey = groupExpandKey(group)
+            if (!expandedPopupGroupIds.contains(expandKey)) {
+                expandedPopupGroupIds.add(expandKey)
+            }
+
+            val groupRoot = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            }
+
+            val header = inflater.inflate(R.layout.config_popup_group_header, groupRoot, false)
+            val tvExpand = header.findViewById<TextView>(R.id.tvExpand)
+            val tvGroupName = header.findViewById<TextView>(R.id.tvGroupName)
+            tvGroupName.text = group.groupName
+
+            val children = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(28, 0, 0, 4)
+            }
+
+            fun applyExpandedState() {
+                val expanded = expandedPopupGroupIds.contains(expandKey)
+                tvExpand.text = if (expanded) "▼" else "▶"
+                children.visibility = if (expanded) View.VISIBLE else View.GONE
+            }
+            applyExpandedState()
+
+            header.setOnClickListener {
+                if (expandedPopupGroupIds.contains(expandKey)) {
+                    expandedPopupGroupIds.remove(expandKey)
+                } else {
+                    expandedPopupGroupIds.add(expandKey)
                 }
-                configList?.addView(header)
+                applyExpandedState()
             }
 
             if (group.configs.isEmpty()) {
-                val empty = TextView(this).apply {
+                children.addView(TextView(this).apply {
                     text = "（无配置）"
                     textSize = 12f
                     setTextColor(ContextCompat.getColor(this@FloatingBallService, android.R.color.darker_gray))
-                    setPadding(0, 0, 0, 8)
+                    setPadding(0, 4, 0, 8)
+                })
+            } else {
+                for (config in group.configs) {
+                    val configItem = inflater.inflate(R.layout.config_popup_item, children, false)
+                    configItem.findViewById<TextView>(R.id.configName).text = config.configName
+                    val activeOnThisScreen = config.active &&
+                        ConfigRepository.isOverlayRunningForScreenType(this, group.screenType) &&
+                        group.configs.any { it.configName == config.configName && it.active }
+                    val statusView = configItem.findViewById<TextView>(R.id.configStatus)
+                    statusView.text = if (activeOnThisScreen) "已激活" else "未激活"
+                    statusView.setTextColor(
+                        ContextCompat.getColor(
+                            this@FloatingBallService,
+                            if (activeOnThisScreen) android.R.color.holo_green_dark
+                            else android.R.color.darker_gray
+                        )
+                    )
+                    configItem.setOnClickListener { toggleConfig(group, config) }
+                    children.addView(configItem)
                 }
-                configList?.addView(empty)
-                continue
             }
 
-            for (config in group.configs) {
-                val configItem = inflater.inflate(R.layout.config_popup_item, null)
-                val configName = configItem.findViewById<TextView>(R.id.configName)
-                val configStatus = configItem.findViewById<TextView>(R.id.configStatus)
-
-                configName.text = config.configName
-                val activeOnThisScreen = config.active && group.screenType == popupScreenType
-                configStatus.text = if (activeOnThisScreen) "已激活" else "未激活"
-                configStatus.setTextColor(
-                    if (activeOnThisScreen)
-                        ContextCompat.getColor(this@FloatingBallService, android.R.color.holo_green_dark)
-                    else
-                        ContextCompat.getColor(this@FloatingBallService, android.R.color.darker_gray)
-                )
-
-                configItem.setOnClickListener {
-                    toggleConfig(group, config)
-                }
-                configList?.addView(configItem)
-            }
+            groupRoot.addView(header)
+            groupRoot.addView(children)
+            configList?.addView(groupRoot)
         }
     }
 
     private fun hideConfigPopup() {
         isExpanded = false
+        expandedPopupGroupIds.clear()
         try {
             if (configPopupView != null) {
                 windowManager?.removeView(configPopupView)
@@ -873,7 +934,7 @@ class FloatingBallService : Service() {
                 android.util.Log.d("FloatingBallService", "设置配置: ${group.groupName}/${config.configName}")
 
                 if (ConfigRepository.isAutoStartOverlayEnabled(this)) {
-                    OverlayToggler.turnOnOverlayForScreenType(this, screenType)
+                    OverlayToggler.turnOnOverlayForBoundGroup(this, group, config)
                 }
             }
 
@@ -887,8 +948,7 @@ class FloatingBallService : Service() {
     private fun refreshConfigPopupInPlace() {
         val view = configPopupView ?: return
         val configList = view.findViewById<LinearLayout>(R.id.configList)
-        val groupTitle = view.findViewById<TextView>(R.id.groupTitle)
-        refreshConfigPopupList(configList, groupTitle, themedInflater())
+        refreshConfigPopupList(configList, themedInflater())
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

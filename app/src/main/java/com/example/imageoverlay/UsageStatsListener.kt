@@ -81,7 +81,7 @@ class UsageStatsListener(private val context: Context) {
                                         )
                                     }
                                 }
-                                ConfigRepository.getGroupByPackageName(packageName) != null -> {
+                                ConfigRepository.hasBoundGroupForPackage(packageName) -> {
                                     Log.d("UsageStatsListener", "检测到绑定应用: $packageName")
                                     ConfigRepository.handleAppLaunch(
                                         context, packageName, isLauncher = false

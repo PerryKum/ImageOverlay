@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import com.example.imageoverlay.OverlayService
+import com.example.imageoverlay.model.Config
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.model.Group
 
 /**
  * 遮罩开关工具类，统一处理默认遮罩的开启/关闭逻辑
@@ -58,6 +60,47 @@ object OverlayToggler {
             ConfigRepository.save(context)
         } catch (e: Exception) {
             android.util.Log.e("OverlayToggler", "关闭遮罩失败 screen=$screenType", e)
+        }
+    }
+
+    /** 仅开启指定绑定组在对应屏上的遮罩，不按屏解析其它组 */
+    fun turnOnOverlayForBoundGroup(context: Context, group: Group, config: Config): Boolean {
+        return try {
+            if (!PermissionUtil.checkOverlayPermission(context)) {
+                android.util.Log.w("OverlayToggler", "悬浮窗权限未授予")
+                return false
+            }
+            if (config.imageUri.isBlank()) {
+                return false
+            }
+
+            val screenType = group.screenType
+            ConfigRepository.clearActiveConfigsForScreenType(screenType)
+            group.configs.find { it.configName == config.configName }?.active = true
+            ConfigRepository.setDefaultConfig(context, group.id, config, screenType)
+            ConfigRepository.save(context)
+
+            val intent = Intent(context, OverlayService::class.java)
+            intent.putExtra("imageUri", config.imageUri)
+            intent.putExtra("opacity", ConfigRepository.getDefaultOpacity(context))
+            if (screenType == "secondary") {
+                intent.putExtra(
+                    OverlayService.EXTRA_DISPLAY_ID,
+                    ConfigRepository.displayKeyForScreenType(context, screenType)
+                )
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+
+            ConfigRepository.setDefaultActive(context, true, screenType)
+            true
+        } catch (e: Exception) {
+            android.util.Log.e("OverlayToggler", "开启绑定组遮罩失败", e)
+            false
         }
     }
 

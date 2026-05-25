@@ -50,6 +50,9 @@ object FloatingBallLauncher {
         context.stopService(Intent(context, FloatingBallService::class.java))
     }
 
+    /**
+     * 仅当包名已绑定配置组时返回；未绑定应用不启动悬浮球。
+     */
     private fun resolvePackageName(context: Context, hint: String?): String? {
         if (!hint.isNullOrBlank() && hint != context.packageName) {
             if (ConfigRepository.getGroupByPackageName(hint) != null) {
@@ -63,9 +66,6 @@ object FloatingBallLauncher {
         ) {
             return foreground
         }
-        return ConfigRepository.getGroups()
-            .firstOrNull { !it.boundPackageName.isNullOrBlank() }
-            ?.boundPackageName
-            ?.takeIf { it != context.packageName }
+        return null
     }
 }
