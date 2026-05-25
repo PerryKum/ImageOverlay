@@ -742,7 +742,7 @@ object ConfigRepository {
     }
     
     /**
-     * 绑定应用退到后台：若其已不在前台栈顶，则关闭由该包自动开启、且仍标记为激活的各屏遮罩。
+     * 绑定应用退到后台：若其已不在前台栈顶，则关闭该包在各屏上仍激活的遮罩。
      * 需开启「自动开启遮罩」；不依赖桌面包名白名单。
      */
     fun handleBoundAppLeftForeground(context: Context, packageName: String) {
@@ -762,6 +762,31 @@ object ConfigRepository {
             )
             return
         }
+        turnOffActiveBoundPackageOverlays(context, packageName, "绑定应用退后台")
+    }
+
+    /**
+     * 悬浮球服务结束（隐藏/销毁）时，关闭当前会话绑定包在各屏上的激活遮罩。
+     * 与「自动开启遮罩」开关无关，覆盖悬浮球内手动开启的遮罩。
+     */
+    fun closeOverlaysWhenFloatingBallEnds(context: Context, packageName: String?) {
+        if (packageName.isNullOrBlank()) return
+        if (!hasBoundGroupForPackage(packageName)) return
+        if (isServiceStarting || isServiceStopping) {
+            android.util.Log.d(
+                "ConfigRepository",
+                "服务启停中，跳过悬浮球结束关遮罩: $packageName"
+            )
+            return
+        }
+        turnOffActiveBoundPackageOverlays(context, packageName, "悬浮球结束")
+    }
+
+    private fun turnOffActiveBoundPackageOverlays(
+        context: Context,
+        packageName: String,
+        reason: String
+    ) {
         val screenTypes = mutableListOf("main")
         if (com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
             screenTypes.add("secondary")
@@ -776,7 +801,7 @@ object ConfigRepository {
             )
             android.util.Log.d(
                 "ConfigRepository",
-                "绑定应用退后台，关闭 $screenType 遮罩: $packageName"
+                "$reason，关闭 $screenType 遮罩: $packageName"
             )
         }
     }

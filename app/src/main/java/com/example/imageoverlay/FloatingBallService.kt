@@ -251,8 +251,10 @@ class FloatingBallService : Service() {
     }
 
     override fun onDestroy() {
+        val sessionPackage = boundPackageName
+        ConfigRepository.closeOverlaysWhenFloatingBallEnds(applicationContext, sessionPackage)
         super.onDestroy()
-        android.util.Log.d("FloatingBallService", "服务销毁，清理资源")
+        android.util.Log.d("FloatingBallService", "服务销毁，清理资源 package=$sessionPackage")
         unregisterOverlayStateReceiver()
         // 停止桌面检测
         try {
