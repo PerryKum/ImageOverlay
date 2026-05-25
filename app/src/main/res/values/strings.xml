@@ -8,6 +8,10 @@
     <string name="tab_config">建立配置</string>
     <string name="tab_settings">设置</string>
     <string name="tile_default_toggle">默认遮罩</string>
+    <string name="tile_mode_both_on">双屏开</string>
+    <string name="tile_mode_main_on">上屏开</string>
+    <string name="tile_mode_secondary_on">下屏开</string>
+    <string name="tile_mode_all_off">全部关闭</string>
     <string name="tile_settings">磁贴设置</string>
     <string name="toggle_overlay">开启/关闭遮罩</string>
     <string name="key_bind_overlay_main">开启/关闭主屏遮罩</string>

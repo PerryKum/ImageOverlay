@@ -54,37 +54,6 @@
                 android:layout_marginEnd="20dp"/>
         </RelativeLayout>
 
-        <LinearLayout
-            android:id="@+id/layoutDefaultConfig"
-            android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:orientation="horizontal"
-            android:padding="16dp"
-            android:gravity="center_vertical"
-            android:background="@color/io_bg"
-            android:visibility="gone">
-            <ImageView
-                android:id="@+id/ivDefaultStatus"
-                android:layout_width="24dp"
-                android:layout_height="24dp"
-                android:layout_marginEnd="16dp"
-                android:src="@drawable/ic_circle_red"/>
-            <ImageView
-                android:id="@+id/ivDefaultThumb"
-                android:layout_width="56dp"
-                android:layout_height="56dp"
-                android:layout_marginEnd="16dp"
-                android:scaleType="centerCrop"
-                android:background="@color/io_thumb_bg"/>
-            <TextView
-                android:id="@+id/tvDefaultName"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:textSize="18sp"
-                android:textColor="@color/io_text_primary"
-                android:text="默认配置（长按任意配置可设置）"/>
-        </LinearLayout>
-
         <androidx.recyclerview.widget.RecyclerView
             android:id="@+id/recyclerViewGroups"
             android:layout_width="match_parent"

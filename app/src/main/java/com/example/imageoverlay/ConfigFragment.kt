@@ -13,7 +13,6 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
 import android.widget.ImageButton
-import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.Fragment
@@ -21,7 +20,6 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.example.imageoverlay.adapter.GroupAdapter
 import com.example.imageoverlay.model.ConfigRepository
-import com.example.imageoverlay.util.PermissionUtil
 import com.example.imageoverlay.model.Group
 import com.example.imageoverlay.util.ConfigPathUtil
 import com.google.android.material.tabs.TabLayout
@@ -30,12 +28,8 @@ class ConfigFragment : Fragment() {
 	private lateinit var recyclerView: RecyclerView
 	private lateinit var adapter: GroupAdapter
 	private var groupList: MutableList<Group> = mutableListOf()
-	private var ivDefaultStatus: android.widget.ImageView? = null
-	private var ivDefaultThumb: android.widget.ImageView? = null
-	private var tvDefaultName: android.widget.TextView? = null
 	private lateinit var tvTitle: TextView
 	private var currentScreenType: String = "main"
-	private var layoutDefaultConfig: LinearLayout? = null
 
 	override fun onCreateView(
 		inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?
@@ -61,12 +55,10 @@ class ConfigFragment : Fragment() {
 							currentScreenType = "main"
 							tvTitle.text = "组列表"
 							loadGroupsForCurrentScreen()
-							refreshDefaultRow()
 						}
 							1 -> {
 								currentScreenType = "secondary"
 								tvTitle.text = "组列表 - 副屏"
-								layoutDefaultConfig?.visibility = View.GONE
 								loadGroupsForCurrentScreen()
 							}
 						}
@@ -95,102 +87,6 @@ class ConfigFragment : Fragment() {
 		})
 		recyclerView.adapter = adapter
 
-		// Default config row
-		layoutDefaultConfig = view.findViewById<LinearLayout>(R.id.layoutDefaultConfig)
-		ivDefaultStatus = view.findViewById(R.id.ivDefaultStatus)
-		ivDefaultThumb = view.findViewById(R.id.ivDefaultThumb)
-		tvDefaultName = view.findViewById(R.id.tvDefaultName)
-
-		refreshDefaultRow()
-
-		ivDefaultStatus?.setOnClickListener {
-			// 操作前先检查并同步状态
-			val currentServiceRunning = ConfigRepository.isOverlayRunningForScreenType(requireContext(), "main")
-			val savedDefaultActive = ConfigRepository.isDefaultActive(requireContext(), "main")
-			
-			// 如果状态不一致，先同步
-			if (savedDefaultActive != currentServiceRunning) {
-				android.util.Log.w("ConfigFragment", "操作前检测到状态不同步，先同步: 保存状态=$savedDefaultActive, 服务状态=$currentServiceRunning")
-				
-				if (savedDefaultActive && !currentServiceRunning) {
-					// 保存状态显示为激活，但服务未运行 - 清理状态
-					ConfigRepository.setDefaultActive(requireContext(), false, "main")
-					
-					// 清理当前屏的激活状态
-					ConfigRepository.clearActiveConfigsForScreenType(currentScreenType)
-					ConfigRepository.save(requireContext())
-					
-					android.widget.Toast.makeText(requireContext(), "状态已同步，请重新操作", android.widget.Toast.LENGTH_SHORT).show()
-					refreshDefaultRow()
-					return@setOnClickListener
-				} else if (!savedDefaultActive && currentServiceRunning) {
-					// 保存状态显示为未激活，但服务在运行 - 同步状态
-					ConfigRepository.setDefaultActive(requireContext(), true, "main")
-					android.widget.Toast.makeText(requireContext(), "状态已同步，请重新操作", android.widget.Toast.LENGTH_SHORT).show()
-					refreshDefaultRow()
-					return@setOnClickListener
-				}
-			}
-			
-			val def = ConfigRepository.getDefaultConfig(requireContext(), "main")
-			val active = ConfigRepository.isDefaultActive(requireContext(), "main")
-			
-			if (active) {
-				OverlayService.stopDisplay(
-					requireContext(),
-					ConfigRepository.displayKeyForScreenType(requireContext(), "main")
-				)
-				ConfigRepository.setDefaultActive(requireContext(), false, "main")
-				ConfigRepository.clearActiveConfigsForScreenType("main")
-				ConfigRepository.save(requireContext())
-				android.widget.Toast.makeText(requireContext(), "默认遮罩已停止", android.widget.Toast.LENGTH_SHORT).show()
-			} else {
-				if (def != null && !def.imageUri.isBlank() && PermissionUtil.checkOverlayPermission(requireContext())) {
-					ConfigRepository.clearActiveConfigsForScreenType("main")
-					ConfigRepository.save(requireContext())
-					val intent = android.content.Intent(requireContext(), OverlayService::class.java)
-					intent.putExtra("imageUri", def.imageUri)
-					// 不传递透明度参数，让OverlayService使用全局透明度设置
-					if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-						requireContext().startForegroundService(intent)
-					} else {
-						requireContext().startService(intent)
-					}
-					ConfigRepository.setDefaultActive(requireContext(), true, "main")
-					android.widget.Toast.makeText(requireContext(), "默认遮罩已启动", android.widget.Toast.LENGTH_SHORT).show()
-				} else if (def == null || def.imageUri.isBlank()) {
-					android.widget.Toast.makeText(requireContext(), "请先在任意配置上设置默认配置", android.widget.Toast.LENGTH_SHORT).show()
-				} else {
-					PermissionUtil.openOverlayPermissionSettings(requireContext())
-					android.widget.Toast.makeText(requireContext(), "需要悬浮窗权限，请授权后重试", android.widget.Toast.LENGTH_LONG).show()
-				}
-			}
-			refreshDefaultRow()
-		}
-
-		// Also refresh when coming back
-		view.viewTreeObserver.addOnWindowFocusChangeListener {
-			if (isAdded && context != null) {
-				refreshDefaultRow()
-			}
-		}
-
-		// 长按默认配置行 -> 清除默认配置
-		layoutDefaultConfig?.setOnLongClickListener {
-			android.app.AlertDialog.Builder(requireContext())
-				.setTitle("清除默认配置")
-				.setMessage("是否清除默认配置？")
-				.setPositiveButton("确定") { d, _ ->
-					ConfigRepository.clearDefaultConfig(requireContext())
-					refreshDefaultRow()
-					android.widget.Toast.makeText(requireContext(), "已清除默认配置", android.widget.Toast.LENGTH_SHORT).show()
-					d.dismiss()
-				}
-				.setNegativeButton("取消", null)
-				.show()
-			true
-		}
-
 		val btnAddGroup = view.findViewById<ImageButton>(R.id.btnAddGroup)
 		btnAddGroup.setOnClickListener {
 			showAddGroupDialog()
@@ -199,7 +95,6 @@ class ConfigFragment : Fragment() {
 		btnRefreshGroup.setOnClickListener {
 			ConfigRepository.load(requireContext())
 			loadGroupsForCurrentScreen()
-			refreshDefaultRow()
 			Toast.makeText(requireContext(), "已刷新", Toast.LENGTH_SHORT).show()
 		}
 		return view
@@ -217,72 +112,12 @@ class ConfigFragment : Fragment() {
 		}
 	}
 
-	fun refreshDefaultRow() {
-		if (!isAdded || context == null) return
-		
-		try {
-			val def = ConfigRepository.getDefaultConfig(requireContext())
-			val title = if (def == null) {
-				"默认配置（长按任意配置可设置）"
-			} else {
-				val groupId = ConfigRepository.getDefaultGroupId(requireContext()) ?: ""
-				val groupName = ConfigRepository.findGroupById(groupId)?.groupName ?: groupId
-				"默认配置（" + groupName + "/" + def.configName + ")"
-			}
-			tvDefaultName?.text = title
-			
-			// 实时检查服务状态并同步
-			val currentServiceRunning = ConfigRepository.isOverlayRunningForScreenType(requireContext(), "main")
-			val savedDefaultActive = ConfigRepository.isDefaultActive(requireContext(), "main")
-			
-			// 如果状态不一致，立即同步
-			if (savedDefaultActive != currentServiceRunning) {
-				android.util.Log.w("ConfigFragment", "refreshDefaultRow检测到状态不同步: 保存状态=$savedDefaultActive, 服务状态=$currentServiceRunning")
-				
-				if (savedDefaultActive && !currentServiceRunning) {
-					// 保存状态显示为激活，但服务未运行 - 立即清理状态
-					android.util.Log.w("ConfigFragment", "立即清理无效的默认配置激活状态")
-					ConfigRepository.setDefaultActive(requireContext(), false, "main")
-					
-					// 清理当前屏的激活状态
-					ConfigRepository.clearActiveConfigsForScreenType(currentScreenType)
-					ConfigRepository.save(requireContext())
-					
-					// 给用户提示
-					android.widget.Toast.makeText(requireContext(), "检测到预设遮罩已停止，状态已同步", android.widget.Toast.LENGTH_SHORT).show()
-				} else if (!savedDefaultActive && currentServiceRunning) {
-					// 保存状态显示为未激活，但服务在运行 - 同步状态
-					android.util.Log.w("ConfigFragment", "立即同步为激活状态")
-					ConfigRepository.setDefaultActive(requireContext(), true, "main")
-					
-					// 给用户提示
-					android.widget.Toast.makeText(requireContext(), "检测到预设遮罩正在运行，状态已同步", android.widget.Toast.LENGTH_SHORT).show()
-				}
-			}
-			
-			// 使用同步后的状态显示
-			val finalIsActive = ConfigRepository.isDefaultActive(requireContext(), "main")
-			ivDefaultStatus?.setImageResource(if (finalIsActive) R.drawable.ic_circle_green else R.drawable.ic_circle_red)
-			
-			if (!def?.imageUri.isNullOrBlank()) {
-				try { ivDefaultThumb?.setImageURI(android.net.Uri.parse(def?.imageUri ?: "")) } catch (_: Exception) { ivDefaultThumb?.setImageResource(android.R.drawable.ic_menu_report_image) }
-			} else {
-				ivDefaultThumb?.setImageResource(android.R.drawable.ic_menu_report_image)
-			}
-		} catch (e: Exception) {
-			android.util.Log.e("ConfigFragment", "refreshDefaultRow异常", e)
-		}
-	}
-	
-
-
 	override fun onResume() {
 		super.onResume()
 		// 强制同步预设模式状态
 		forceSyncPresetState()
 		ConfigRepository.load(requireContext())
 		loadGroupsForCurrentScreen()
-		refreshDefaultRow()
 	}
 	
 	/**
@@ -317,44 +152,6 @@ class ConfigFragment : Fragment() {
 		}
 	}
 	
-	private fun isOverlayServiceRunning(): Boolean {
-		return try {
-			// 检查前台服务通知
-			val notificationManager = requireContext().getSystemService(android.app.NotificationManager::class.java)
-			val activeNotifications = notificationManager.activeNotifications
-			val hasNotification = activeNotifications.any { 
-				it.packageName == requireContext().packageName && it.id == 1 
-			}
-			
-			if (hasNotification) {
-				android.util.Log.d("ConfigFragment", "通过通知检测到服务运行")
-				return true
-			}
-			
-			// 备用方案：检查运行的服务
-			try {
-				val manager = requireContext().getSystemService(android.app.ActivityManager::class.java)
-				val runningServices = manager.getRunningServices(Integer.MAX_VALUE)
-				val isServiceInList = runningServices.any { 
-					it.service.className == "com.example.imageoverlay.OverlayService" 
-				}
-				
-				if (isServiceInList) {
-					android.util.Log.d("ConfigFragment", "通过服务列表检测到服务运行")
-					return true
-				}
-			} catch (e: Exception) {
-				android.util.Log.w("ConfigFragment", "服务列表检查失败，使用通知检查结果", e)
-			}
-			
-			android.util.Log.d("ConfigFragment", "服务未运行")
-			false
-		} catch (e: Exception) {
-			android.util.Log.e("ConfigFragment", "检查服务状态失败", e)
-			false
-		}
-	}
-
 	private fun showAddGroupDialog() {
 		val dialogView = LayoutInflater.from(requireContext()).inflate(R.layout.dialog_add_group, null)
 		val etGroupName = dialogView.findViewById<EditText>(R.id.etGroupName)
@@ -400,6 +197,7 @@ class ConfigFragment : Fragment() {
 		} else {
 			options.add("绑定应用")
 		}
+		options.add("设为全局默认")
 		options.add("删除组")
 		
 		AlertDialog.Builder(requireContext())
@@ -413,12 +211,39 @@ class ConfigFragment : Fragment() {
 							bindAppToGroup(group)
 						}
 					}
-					1 -> showDeleteGroupDialog(idx)
+					1 -> setGroupAsGlobalDefault(group)
+					2 -> showDeleteGroupDialog(idx)
 				}
 				d.dismiss()
 			}
 			.setNegativeButton("取消", null)
 			.show()
+	}
+
+	/** 将该组当前默认配置写入全局默认（磁贴 / 快捷键，前台未绑定时使用） */
+	private fun setGroupAsGlobalDefault(group: Group) {
+		val config = ConfigRepository.getGroupDefaultConfig(group.id)
+		if (config == null || config.imageUri.isBlank()) {
+			Toast.makeText(
+				requireContext(),
+				"请先在组内添加带图片的配置，并长按配置设为组默认",
+				Toast.LENGTH_SHORT
+			).show()
+			return
+		}
+		ConfigRepository.setDefaultConfig(
+			requireContext(),
+			group.id,
+			config,
+			group.screenType
+		)
+		ConfigRepository.save(requireContext())
+		val screenLabel = if (group.screenType == "secondary") "副屏" else "主屏"
+		Toast.makeText(
+			requireContext(),
+			"已设为${screenLabel}全局默认：${group.groupName}/${config.configName}",
+			Toast.LENGTH_SHORT
+		).show()
 	}
 
 	private fun bindAppToGroup(group: Group) {
