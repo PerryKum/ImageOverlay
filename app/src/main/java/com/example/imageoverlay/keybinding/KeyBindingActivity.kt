@@ -96,7 +96,7 @@ class KeyBindingActivity : AppCompatActivity() {
         val tip = TextView(this).apply {
             text =
                 "请直接按实体键（含音量键）。已开启无障碍时会拦截系统音量条。\n" +
-                    "最多 3 个组合键，按「确定」保存。"
+                    "最多 3 个组合键；与其它功能键集合不能完全相同，也不能互为纯子集。"
             textSize = 14f
         }
         container.addView(tip)
@@ -120,11 +120,16 @@ class KeyBindingActivity : AppCompatActivity() {
             if (keyCode == KeyEvent.KEYCODE_BACK) return
             if (recorded.contains(keyCode)) return
             if (checkKeyConflict(keyCode, function.key)) {
-                Toast.makeText(this, "该按键已绑定到其他功能", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "已有其它功能使用完全相同的按键组合", Toast.LENGTH_SHORT).show()
                 return
             }
             if (recorded.size >= 3) {
                 Toast.makeText(this, "最多只能绑定 3 个按键", Toast.LENGTH_SHORT).show()
+                return
+            }
+            val prospective = recorded + keyCode
+            checkSubsetConflict(prospective, function.key)?.let { msg ->
+                Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
                 return
             }
             recorded.add(keyCode)
@@ -140,6 +145,10 @@ class KeyBindingActivity : AppCompatActivity() {
             .setTitle("绑定按键 - ${function.name}")
             .setView(container)
             .setPositiveButton("确定") { _, _ ->
+                checkSubsetConflict(recorded, function.key)?.let { msg ->
+                    Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
                 saveKeyBinding(function.key, recorded)
             }
             .setNegativeButton("取消", null)
@@ -183,12 +192,30 @@ class KeyBindingActivity : AppCompatActivity() {
             list.add(KeyBindingFunction(getString(R.string.key_bind_overlay_main), "toggle_overlay_main"))
             list.add(KeyBindingFunction(getString(R.string.key_bind_overlay_secondary), "toggle_overlay_secondary"))
         }
+        list.add(KeyBindingFunction(getString(R.string.key_bind_overlay_prev), "overlay_prev"))
+        list.add(KeyBindingFunction(getString(R.string.key_bind_overlay_next), "overlay_next"))
         list.add(KeyBindingFunction(getString(R.string.key_bind_floating_ball), "toggle_floating_ball"))
         return list
     }
 
     private fun checkKeyConflict(keyCode: Int, currentFunction: String): Boolean {
         return ConfigRepository.checkKeyConflictForFunction(this, keyCode, currentFunction)
+    }
+
+    private fun checkSubsetConflict(keyCodes: List<Int>, currentFunction: String): String? {
+        for (other in bindingFunctions) {
+            if (other.key == currentFunction) continue
+            val otherKeys = getCurrentBoundKeys(other.key).distinct().sorted()
+            val newSet = keyCodes.distinct().sorted()
+            if (otherKeys.isEmpty() || otherKeys == newSet) continue
+            if (newSet.all { it in otherKeys }) {
+                return "与「${other.name}」(${formatKeyNames(otherKeys)}) 互为纯子集，不能同时绑定"
+            }
+            if (otherKeys.all { it in newSet }) {
+                return "与「${other.name}」(${formatKeyNames(otherKeys)}) 互为纯子集，不能同时绑定"
+            }
+        }
+        return null
     }
 
     private fun saveKeyBinding(functionKey: String, keys: List<Int>) {

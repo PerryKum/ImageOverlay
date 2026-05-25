@@ -14,8 +14,9 @@ import com.example.imageoverlay.util.OverlayToggler
  */
 class KeyBindingService : AccessibilityService() {
 
-    // 用于组合键检测的简单状态：记录最近按下的keyCode集合
+    // 用于组合键检测：当前按下的键；组合触发后需全部抬起才可再次触发
     private val pressedKeys: MutableSet<Int> = mutableSetOf()
+    private var comboTriggered = false
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         // 不处理可访问性事件，键由onKeyEvent接收
@@ -53,10 +54,15 @@ class KeyBindingService : AccessibilityService() {
 
         when (event.action) {
             KeyEvent.ACTION_DOWN -> pressedKeys.add(event.keyCode)
-            KeyEvent.ACTION_UP -> pressedKeys.remove(event.keyCode)
+            KeyEvent.ACTION_UP -> {
+                pressedKeys.remove(event.keyCode)
+                if (pressedKeys.isEmpty()) {
+                    comboTriggered = false
+                }
+            }
         }
 
-        if (event.action == KeyEvent.ACTION_DOWN) {
+        if (event.action == KeyEvent.ACTION_DOWN && !comboTriggered) {
             if (tryHandleFunction("toggle_overlay") { OverlayToggler.toggleOverlayBoth(this) }) return true
             if (tryHandleFunction("toggle_overlay_main") {
                 OverlayToggler.toggleOverlayForScreenType(this, "main")
@@ -64,11 +70,27 @@ class KeyBindingService : AccessibilityService() {
             if (tryHandleFunction("toggle_overlay_secondary") {
                 OverlayToggler.toggleOverlayForScreenType(this, "secondary")
             }) return true
+            if (tryHandleFunction("overlay_prev") { cycleBoundOverlay(false) }) return true
+            if (tryHandleFunction("overlay_next") { cycleBoundOverlay(true) }) return true
             if (tryHandleFunction("toggle_floating_ball") { toggleFloatingBall() }) return true
         }
         return super.onKeyEvent(event)
     }
 
+    private fun cycleBoundOverlay(forward: Boolean) {
+        when (ConfigRepository.cycleBoundOverlayForForeground(this, forward)) {
+            ConfigRepository.CycleBoundOverlayResult.NO_MORE -> {
+                Toast.makeText(
+                    this,
+                    getString(R.string.key_bind_overlay_no_more),
+                    Toast.LENGTH_SHORT
+                ).show()
+            }
+            else -> {}
+        }
+    }
+
+    /** 绑定键全部在按下集合中即触发（与录制顺序无关；录入时已禁止纯子集并存） */
     private fun tryHandleFunction(functionKey: String, action: () -> Unit): Boolean {
         val boundKeys = ConfigRepository.getBoundHardwareKeysForFunction(this, functionKey)
         if (boundKeys.isNotEmpty() && boundKeys.all { pressedKeys.contains(it) }) {
@@ -77,7 +99,7 @@ class KeyBindingService : AccessibilityService() {
             } catch (e: Exception) {
                 android.util.Log.e("KeyBindingService", "执行 $functionKey 失败", e)
             }
-            pressedKeys.clear()
+            comboTriggered = true
             return true
         }
         return false

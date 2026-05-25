@@ -6,8 +6,10 @@ import android.app.NotificationManager
 import android.app.Service
 import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.PixelFormat
 import android.os.Build
 import android.animation.ValueAnimator
@@ -83,7 +85,8 @@ class FloatingBallService : Service() {
     private var touchSlopPx = 0
     private var autoCollapseDelayMs = 3000L
     private lateinit var tapDetector: GestureDetector
-    
+
+    private var overlayStateReceiver: BroadcastReceiver? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
@@ -124,7 +127,9 @@ class FloatingBallService : Service() {
                 return START_NOT_STICKY
             }
 
-            val foreground = ForegroundAppUtil.getRecentForegroundPackage(this)
+            ForegroundAppUtil.seedForeground(packageName)
+
+            val foreground = ForegroundAppUtil.getTopForegroundPackage()
             if (foreground == applicationContext.packageName) {
                 android.util.Log.d("FloatingBallService", "本应用在前台，停止服务")
                 stopSelf()
@@ -143,6 +148,7 @@ class FloatingBallService : Service() {
                 removeFloatingBall()
             }
             showFloatingBall()
+            registerOverlayStateReceiver()
             startHomeDetection()
             android.util.Log.d("FloatingBallService", "悬浮球已显示 package=$packageName")
         } catch (e: Exception) {
@@ -247,6 +253,7 @@ class FloatingBallService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         android.util.Log.d("FloatingBallService", "服务销毁，清理资源")
+        unregisterOverlayStateReceiver()
         // 停止桌面检测
         try {
             homeCheckHandler.removeCallbacksAndMessages(null)
@@ -616,12 +623,45 @@ class FloatingBallService : Service() {
 
     private fun shouldAutoHideFloatingBall(): Boolean {
         if (AppStateUtil.isInAppActive(applicationContext)) return true
-        val foreground = ForegroundAppUtil.getRecentForegroundPackage(this) ?: return true
-        if (foreground == applicationContext.packageName) return true
         val boundPkg = boundPackageName
         if (boundPkg.isNullOrBlank()) return true
-        if (foreground == boundPkg) return false
+        // 栈顶不是绑定包，或绑定包已收到 MOVE_TO_BACKGROUND（不在栈中）
+        if (!ForegroundAppUtil.containsPackage(boundPkg)) return true
+        val top = ForegroundAppUtil.getTopForegroundPackage()
+        if (top == applicationContext.packageName) return true
+        if (top == boundPkg) return false
         return true
+    }
+
+    private fun registerOverlayStateReceiver() {
+        if (overlayStateReceiver != null) return
+        overlayStateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    OverlayService.ACTION_OVERLAY_STATE_CHANGED,
+                    ConfigRepository.ACTION_CONFIG_ACTIVE_CHANGED -> {
+                        uiHandler.post { refreshConfigPopupInPlace() }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(OverlayService.ACTION_OVERLAY_STATE_CHANGED)
+            addAction(ConfigRepository.ACTION_CONFIG_ACTIVE_CHANGED)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(overlayStateReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(overlayStateReceiver, filter)
+        }
+    }
+
+    private fun unregisterOverlayStateReceiver() {
+        try {
+            overlayStateReceiver?.let { unregisterReceiver(it) }
+        } catch (_: Exception) {
+        }
+        overlayStateReceiver = null
     }
 
     companion object {
@@ -864,9 +904,8 @@ class FloatingBallService : Service() {
                 for (config in group.configs) {
                     val configItem = inflater.inflate(R.layout.config_popup_item, children, false)
                     configItem.findViewById<TextView>(R.id.configName).text = config.configName
-                    val activeOnThisScreen = config.active &&
-                        ConfigRepository.isOverlayRunningForScreenType(this, group.screenType) &&
-                        group.configs.any { it.configName == config.configName && it.active }
+                    val activeOnThisScreen =
+                        ConfigRepository.isConfigShownActiveOnScreen(this, group, config)
                     val statusView = configItem.findViewById<TextView>(R.id.configStatus)
                     statusView.text = if (activeOnThisScreen) "已激活" else "未激活"
                     statusView.setTextColor(
@@ -916,9 +955,8 @@ class FloatingBallService : Service() {
 
             val groupId = group.id
             val screenType = group.screenType
-            val activeOnThisScreen = config.active &&
-                ConfigRepository.isOverlayRunningForScreenType(this, screenType) &&
-                group.configs.any { it.configName == config.configName && it.active }
+            val activeOnThisScreen =
+                ConfigRepository.isConfigShownActiveOnScreen(this, group, config)
 
             if (activeOnThisScreen) {
                 config.active = false
@@ -932,10 +970,8 @@ class FloatingBallService : Service() {
             } else {
                 ConfigRepository.switchDefaultConfig(this, groupId, config)
                 android.util.Log.d("FloatingBallService", "设置配置: ${group.groupName}/${config.configName}")
-
-                if (ConfigRepository.isAutoStartOverlayEnabled(this)) {
-                    OverlayToggler.turnOnOverlayForBoundGroup(this, group, config)
-                }
+                // 悬浮球内手动点选始终可开遮罩，与「自动开启遮罩」开关无关
+                OverlayToggler.turnOnOverlayForBoundGroup(this, group, config)
             }
 
             refreshConfigPopupInPlace()

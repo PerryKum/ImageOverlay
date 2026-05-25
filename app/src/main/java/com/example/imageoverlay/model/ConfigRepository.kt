@@ -1,6 +1,7 @@
 package com.example.imageoverlay.model
 
 import android.content.Context
+import android.content.Intent
 import android.hardware.display.DisplayManager
 import android.net.Uri
 import android.view.Display
@@ -13,6 +14,9 @@ import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 
 object ConfigRepository {
+    const val ACTION_CONFIG_ACTIVE_CHANGED =
+        "com.example.imageoverlay.CONFIG_ACTIVE_CHANGED"
+
     private val gson = Gson()
     private var groupList: MutableList<Group> = mutableListOf()
     private val configLock = Any()
@@ -359,6 +363,22 @@ object ConfigRepository {
         return OverlayService.isRunningOnDisplay(displayKeyForScreenType(context, screenType))
     }
 
+    /** 悬浮球列表：配置项在内存中 active 且该屏遮罩服务正在显示同一项 */
+    fun isConfigShownActiveOnScreen(context: Context, group: Group, config: Config): Boolean {
+        if (!config.active) return false
+        if (!isOverlayRunningForScreenType(context, group.screenType)) return false
+        val live = findGroupById(group.id) ?: return false
+        return live.configs.any { it.configName == config.configName && it.active }
+    }
+
+    fun notifyConfigActiveChanged(context: Context) {
+        try {
+            context.sendBroadcast(Intent(ACTION_CONFIG_ACTIVE_CHANGED))
+        } catch (e: Exception) {
+            android.util.Log.e("ConfigRepository", "广播配置激活状态失败", e)
+        }
+    }
+
     /** 解析某块屏要显示的遮罩：优先当前激活项，其次该屏默认配置，再其次任意有图的配置 */
     fun resolveOverlayConfigForScreenType(context: Context, screenType: String): Config? {
         groupList.filter { it.screenType == screenType }.forEach { group ->
@@ -389,6 +409,8 @@ object ConfigRepository {
             "toggle_overlay",
             "toggle_overlay_main",
             "toggle_overlay_secondary",
+            "overlay_prev",
+            "overlay_next",
             "toggle_floating_ball"
         )
         if (!com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
@@ -546,6 +568,99 @@ object ConfigRepository {
         return getBoundGroupsForScreenType(packageName, screenType).firstOrNull()
     }
 
+    /**
+     * 该包名在某屏上「当前」使用的绑定组：有 active 配置的组；否则取同屏绑定列表中的第一个。
+     */
+    fun getActiveBoundGroupForScreenType(packageName: String, screenType: String): Group? {
+        val groups = getBoundGroupsForScreenType(packageName, screenType)
+        if (groups.isEmpty()) return null
+        return groups.find { group -> group.configs.any { it.active } } ?: groups.first()
+    }
+
+    enum class CycleBoundOverlayResult {
+        /** 至少一块屏切换成功 */
+        OK,
+        /** 未绑定组等：静默不提示 */
+        NO_OP,
+        /** 当前组仅一条遮罩 */
+        NO_MORE
+    }
+
+    /**
+     * 在前台绑定应用下，于当前绑定组内循环切换上一条/下一条遮罩配置（不跨组）。
+     */
+    fun cycleBoundOverlayForForeground(context: Context, forward: Boolean): CycleBoundOverlayResult {
+        val packageName = com.example.imageoverlay.util.ForegroundAppUtil
+            .findTopMatching { hasBoundGroupForPackage(it) }
+            ?: return CycleBoundOverlayResult.NO_OP
+
+        var anyOk = false
+        var sawNoMore = false
+        val screenTypes = mutableListOf("main")
+        if (com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
+            screenTypes.add("secondary")
+        }
+        for (screenType in screenTypes) {
+            when (cycleBoundOverlayOnScreenType(context, packageName, screenType, forward)) {
+                CycleBoundOverlayResult.OK -> anyOk = true
+                CycleBoundOverlayResult.NO_MORE -> sawNoMore = true
+                CycleBoundOverlayResult.NO_OP -> {}
+            }
+        }
+        return when {
+            anyOk -> CycleBoundOverlayResult.OK
+            sawNoMore -> CycleBoundOverlayResult.NO_MORE
+            else -> CycleBoundOverlayResult.NO_OP
+        }
+    }
+
+    private fun cycleBoundOverlayOnScreenType(
+        context: Context,
+        packageName: String,
+        screenType: String,
+        forward: Boolean
+    ): CycleBoundOverlayResult {
+        val group = getActiveBoundGroupForScreenType(packageName, screenType)
+            ?: return CycleBoundOverlayResult.NO_OP
+        val configs = group.configs.filter { it.imageUri.isNotBlank() }
+        if (configs.isEmpty()) {
+            return CycleBoundOverlayResult.NO_OP
+        }
+        if (configs.size < 2) {
+            return CycleBoundOverlayResult.NO_MORE
+        }
+
+        var currentIndex = configs.indexOfFirst { it.active }
+        if (currentIndex < 0) {
+            val defaultName = group.defaultConfigName
+            currentIndex = if (!defaultName.isNullOrBlank()) {
+                configs.indexOfFirst { it.configName == defaultName }.takeIf { it >= 0 } ?: 0
+            } else {
+                0
+            }
+        }
+
+        val nextIndex = if (forward) {
+            (currentIndex + 1) % configs.size
+        } else {
+            (currentIndex - 1 + configs.size) % configs.size
+        }
+        val nextConfig = configs[nextIndex]
+
+        switchDefaultConfig(context, group.id, nextConfig)
+        val started = com.example.imageoverlay.util.OverlayToggler.turnOnOverlayForBoundGroup(
+            context,
+            group,
+            nextConfig,
+            persistGlobalDefault = false
+        )
+        android.util.Log.d(
+            "ConfigRepository",
+            "组内切换遮罩: $packageName / ${group.groupName} / ${nextConfig.configName} forward=$forward"
+        )
+        return if (started) CycleBoundOverlayResult.OK else CycleBoundOverlayResult.NO_OP
+    }
+
     // 兼容：返回该包名绑定的第一个组
     fun getGroupByPackageName(packageName: String): Group? {
         return getGroupsByPackageName(packageName).firstOrNull()
@@ -589,12 +704,10 @@ object ConfigRepository {
                 return
             }
             
-            // 检查是否有最近的手动操作，如果有则跳过自动处理
-            if (currentTime - lastManualOperationTime < MANUAL_OPERATION_COOLDOWN) {
-                android.util.Log.d("ConfigRepository", "检测到最近手动操作，跳过自动处理: $packageName")
-                return
-            }
-            
+            // 仅屏蔽「自动切组默认配置」；悬浮球启动、自动开遮罩不受快捷键切换遮罩影响
+            val skipAutoPresetSwitch =
+                currentTime - lastManualOperationTime < MANUAL_OPERATION_COOLDOWN
+
             if (!hasBoundGroupForPackage(packageName)) {
                 android.util.Log.d(
                     "ConfigRepository",
@@ -604,7 +717,9 @@ object ConfigRepository {
             }
 
             lastOperationTime = currentTime
-            applyBoundDefaultConfigsForPackage(context, packageName)
+            if (!skipAutoPresetSwitch) {
+                applyBoundDefaultConfigsForPackage(context, packageName)
+            }
 
             if (isAutoStartOverlayEnabled(context) && !isServiceStarting) {
                 autoStartOverlaysForBoundPackage(context, packageName)
@@ -626,6 +741,57 @@ object ConfigRepository {
         }
     }
     
+    /**
+     * 绑定应用退到后台：若其已不在前台栈顶，则关闭由该包自动开启、且仍标记为激活的各屏遮罩。
+     * 需开启「自动开启遮罩」；不依赖桌面包名白名单。
+     */
+    fun handleBoundAppLeftForeground(context: Context, packageName: String) {
+        if (!hasBoundGroupForPackage(packageName)) return
+        if (!isAutoStartOverlayEnabled(context)) return
+        if (com.example.imageoverlay.util.ForegroundAppUtil.getTopForegroundPackage() == packageName) {
+            android.util.Log.d(
+                "ConfigRepository",
+                "绑定包仍在栈顶，跳过退后台关遮罩: $packageName"
+            )
+            return
+        }
+        if (isServiceStarting || isServiceStopping) {
+            android.util.Log.d(
+                "ConfigRepository",
+                "服务启停中，跳过绑定退后台关遮罩: $packageName"
+            )
+            return
+        }
+        val screenTypes = mutableListOf("main")
+        if (com.example.imageoverlay.util.DisplayUtil.hasSecondaryDisplay(context)) {
+            screenTypes.add("secondary")
+        }
+        for (screenType in screenTypes) {
+            if (getBoundGroupForScreenType(packageName, screenType) == null) continue
+            if (!isOverlayRunningForScreenType(context, screenType)) continue
+            if (!isScreenOverlayOwnedByBoundPackage(packageName, screenType)) continue
+            com.example.imageoverlay.util.OverlayToggler.turnOffOverlayForScreenType(
+                context,
+                screenType
+            )
+            android.util.Log.d(
+                "ConfigRepository",
+                "绑定应用退后台，关闭 $screenType 遮罩: $packageName"
+            )
+        }
+    }
+
+    private fun isScreenOverlayOwnedByBoundPackage(
+        packageName: String,
+        screenType: String
+    ): Boolean {
+        return groupList.any { group ->
+            group.screenType == screenType &&
+                group.boundPackageName == packageName &&
+                group.configs.any { it.active }
+        }
+    }
+
     /**
      * 安全地关闭遮罩，确保完全关闭后再进行其他操作
      */
@@ -699,6 +865,7 @@ object ConfigRepository {
              android.util.Log.d("ConfigRepository", "已设置组默认遮罩: ${groupId}/${defaultConfig.configName}")
              
              save(context)
+             notifyConfigActiveChanged(context)
          } catch (e: Exception) {
              android.util.Log.e("ConfigRepository", "切换默认遮罩配置失败", e)
          }
@@ -876,15 +1043,17 @@ object ConfigRepository {
     }
 
     /**
-     * 检查按键是否与已绑定的其他功能冲突。
+     * 仅当与其它功能的绑定键集合完全相同（顺序无关）时视为冲突。
      */
     fun checkKeyConflictForFunction(context: Context, keyCode: Int, currentFunction: String): Boolean {
+        val current = getBoundHardwareKeysForFunction(context, currentFunction)
+        val prospective = (current + keyCode).distinct().sorted()
+        if (prospective.isEmpty()) return false
         for (funcKey in getKeyBindingFunctionKeys(context)) {
-            if (funcKey != currentFunction) {
-                val boundKeys = getBoundHardwareKeysForFunction(context, funcKey)
-                if (boundKeys.contains(keyCode)) {
-                    return true
-                }
+            if (funcKey == currentFunction) continue
+            val other = getBoundHardwareKeysForFunction(context, funcKey).distinct().sorted()
+            if (other.isNotEmpty() && other == prospective) {
+                return true
             }
         }
         return false

@@ -259,7 +259,7 @@ class OverlayService : Service() {
 
     private fun broadcastOverlayState(active: Boolean) {
         try {
-            val stateIntent = Intent("com.example.imageoverlay.OVERLAY_STATE_CHANGED")
+            val stateIntent = Intent(ACTION_OVERLAY_STATE_CHANGED)
             stateIntent.putExtra("active", active)
             sendBroadcast(stateIntent)
         } catch (_: Exception) {
@@ -276,6 +276,8 @@ class OverlayService : Service() {
     }
 
     companion object {
+        const val ACTION_OVERLAY_STATE_CHANGED =
+            "com.example.imageoverlay.OVERLAY_STATE_CHANGED"
         const val ACTION_STOP_DISPLAY = "com.example.imageoverlay.STOP_DISPLAY"
         const val ACTION_STOP_ALL = "com.example.imageoverlay.STOP_ALL"
         const val EXTRA_DISPLAY_ID = "displayId"

@@ -205,7 +205,9 @@ object OverlayToggler {
     }
 
     private fun foregroundPackageForTile(context: Context): String? =
-        ForegroundAppUtil.getRecentForegroundPackage(context)
+        ForegroundAppUtil.findTopMatching {
+            ConfigRepository.hasBoundGroupForPackage(it)
+        }
 
     /** 磁贴 / 快捷键开启：未绑定 → 全局默认；已绑定任意组 → 仅该屏绑定组默认，且不写全局默认 SP */
     private fun turnOnViaTileOrShortcut(context: Context, screenType: String): Boolean {
@@ -256,6 +258,7 @@ object OverlayToggler {
             ConfigRepository.setDefaultActive(context, false, screenType)
             ConfigRepository.clearActiveConfigsForScreenType(screenType)
             ConfigRepository.save(context)
+            ConfigRepository.notifyConfigActiveChanged(context)
         } catch (e: Exception) {
             android.util.Log.e("OverlayToggler", "关闭遮罩失败 screen=$screenType", e)
         }
@@ -307,6 +310,7 @@ object OverlayToggler {
             if (persistGlobalDefault) {
                 ConfigRepository.setDefaultActive(context, true, screenType)
             }
+            ConfigRepository.notifyConfigActiveChanged(context)
             true
         } catch (e: Exception) {
             android.util.Log.e("OverlayToggler", "开启绑定组遮罩失败", e)

@@ -59,7 +59,7 @@ object FloatingBallLauncher {
                 return hint
             }
         }
-        val foreground = ForegroundAppUtil.getRecentForegroundPackage(context)
+        val foreground = ForegroundAppUtil.getTopForegroundPackage()
         if (!foreground.isNullOrBlank() &&
             foreground != context.packageName &&
             ConfigRepository.getGroupByPackageName(foreground) != null

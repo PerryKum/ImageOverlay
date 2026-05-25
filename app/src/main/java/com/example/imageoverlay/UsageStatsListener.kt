@@ -7,30 +7,34 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.example.imageoverlay.model.ConfigRepository
+import com.example.imageoverlay.util.FloatingBallLauncher
+import com.example.imageoverlay.util.ForegroundAppUtil
 import com.example.imageoverlay.util.LauncherUtil
 import java.util.concurrent.Executors
 
 class UsageStatsListener(private val context: Context) {
-    private val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    private val usageStatsManager =
+        context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     private val executor = Executors.newSingleThreadExecutor()
     private val handler = Handler(Looper.getMainLooper())
     private var isRunning = false
-    private var lastEventTime = System.currentTimeMillis()
-    private var lastPackageName = ""
+    private var lastEventQueryTime = System.currentTimeMillis()
+    private var lastHandledForeground = ""
     private var lastProcessTime = 0L
-    private val PROCESS_COOLDOWN = 3000L // 增加到3秒冷却时间，防止频繁切换
-    private var isProcessing = false // 防止并发处理
-    private var lastLauncherTime = 0L // 记录最后一次检测到桌面的时间
-    private val LAUNCHER_COOLDOWN = 5000L // 桌面检测冷却时间5秒
-    
+    private val PROCESS_COOLDOWN = 3000L
+    private var isProcessing = false
+    private var lastLauncherTime = 0L
+    private val LAUNCHER_COOLDOWN = 5000L
+
     fun start() {
         if (isRunning) return
         isRunning = true
+        lastEventQueryTime = System.currentTimeMillis() - 10_000L
         executor.execute {
             while (isRunning) {
                 try {
-                    checkAppUsage()
-                    Thread.sleep(1000) // 每秒检查一次
+                    drainUsageEvents()
+                    Thread.sleep(500)
                 } catch (e: Exception) {
                     Log.e("UsageStatsListener", "检查应用使用情况失败", e)
                 }
@@ -42,69 +46,105 @@ class UsageStatsListener(private val context: Context) {
         isRunning = false
     }
 
-    private fun checkAppUsage() {
+    private fun drainUsageEvents() {
         val endTime = System.currentTimeMillis()
-        val startTime = endTime - 5000 // 检查最近5秒的事件
+        val startTime = lastEventQueryTime
+        lastEventQueryTime = endTime
 
         val usageEvents = usageStatsManager.queryEvents(startTime, endTime)
         val event = UsageEvents.Event()
-
         while (usageEvents.hasNextEvent()) {
             usageEvents.getNextEvent(event)
-            
-            if (event.eventType == UsageEvents.Event.MOVE_TO_FOREGROUND) {
-                val packageName = event.packageName
-                val currentTime = System.currentTimeMillis()
-                
-                if (packageName != lastPackageName && 
-                    packageName != context.packageName && 
-                    currentTime - lastProcessTime > PROCESS_COOLDOWN &&
-                    !isProcessing) {
-                    
-                    lastPackageName = packageName
-                    lastProcessTime = currentTime
-                    isProcessing = true
-                    Log.d("UsageStatsListener", "检测到应用启动: $packageName")
-                    
-                    // 在主线程中处理应用启动事件
-                    handler.post {
-                        try {
-                            val currentTime = System.currentTimeMillis()
-                            
-                            when {
-                                LauncherUtil.isLauncherPackage(packageName) -> {
-                                    if (currentTime - lastLauncherTime > LAUNCHER_COOLDOWN) {
-                                        lastLauncherTime = currentTime
-                                        Log.d("UsageStatsListener", "检测到桌面: $packageName")
-                                        ConfigRepository.handleAppLaunch(
-                                            context, packageName, isLauncher = true
-                                        )
-                                    }
-                                }
-                                ConfigRepository.hasBoundGroupForPackage(packageName) -> {
-                                    Log.d("UsageStatsListener", "检测到绑定应用: $packageName")
-                                    ConfigRepository.handleAppLaunch(
-                                        context, packageName, isLauncher = false
-                                    )
-                                }
-                                else -> {
-                                    Log.d(
-                                        "UsageStatsListener",
-                                        "忽略非绑定前台切换: $packageName"
-                                    )
-                                }
-                            }
-                        } catch (e: Exception) {
-                            Log.e("UsageStatsListener", "处理应用启动事件失败", e)
-                        } finally {
-                            isProcessing = false
-                        }
-                    }
+            val packageName = event.packageName ?: continue
+            when (event.eventType) {
+                UsageEvents.Event.MOVE_TO_FOREGROUND -> {
+                    ForegroundAppUtil.onMoveToForeground(context, packageName)
+                    dispatchForegroundEntered(packageName)
+                }
+                UsageEvents.Event.MOVE_TO_BACKGROUND -> {
+                    ForegroundAppUtil.onMoveToBackground(context, packageName)
+                    dispatchBackgroundLeft(packageName)
                 }
             }
         }
     }
-    
+
+    private fun dispatchForegroundEntered(packageName: String) {
+        if (packageName == context.packageName) return
+        val now = System.currentTimeMillis()
+        if (packageName == lastHandledForeground &&
+            now - lastProcessTime < PROCESS_COOLDOWN
+        ) {
+            return
+        }
+        if (isProcessing) return
+
+        lastHandledForeground = packageName
+        lastProcessTime = now
+        isProcessing = true
+        Log.d("UsageStatsListener", "MOVE_TO_FOREGROUND: $packageName")
+
+        handler.post {
+            try {
+                when {
+                    LauncherUtil.isLauncherPackage(packageName) -> {
+                        if (now - lastLauncherTime > LAUNCHER_COOLDOWN) {
+                            lastLauncherTime = now
+                            ConfigRepository.handleAppLaunch(
+                                context,
+                                packageName,
+                                isLauncher = true
+                            )
+                        }
+                    }
+                    ConfigRepository.hasBoundGroupForPackage(packageName) -> {
+                        ConfigRepository.handleAppLaunch(
+                            context,
+                            packageName,
+                            isLauncher = false
+                        )
+                    }
+                    else -> {
+                        Log.d("UsageStatsListener", "忽略非绑定前台: $packageName")
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("UsageStatsListener", "处理前台事件失败", e)
+            } finally {
+                isProcessing = false
+            }
+        }
+    }
+
+    private fun dispatchBackgroundLeft(packageName: String) {
+        if (packageName == context.packageName) return
+        Log.d("UsageStatsListener", "MOVE_TO_BACKGROUND: $packageName")
+
+        handler.post {
+            try {
+                if (ConfigRepository.hasBoundGroupForPackage(packageName)) {
+                    if (ConfigRepository.isFloatingBallEnabled(context)) {
+                        FloatingBallLauncher.stop(context)
+                    }
+                    ConfigRepository.handleBoundAppLeftForeground(context, packageName)
+                }
+                if (LauncherUtil.isLauncherPackage(packageName)) {
+                    val now = System.currentTimeMillis()
+                    if (now - lastLauncherTime > LAUNCHER_COOLDOWN) {
+                        lastLauncherTime = now
+                        ConfigRepository.handleAppLaunch(
+                            context,
+                            packageName,
+                            isLauncher = true
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("UsageStatsListener", "处理后台事件失败", e)
+            }
+        }
+    }
+
     companion object {
         private var instance: UsageStatsListener? = null
 

@@ -17,6 +17,9 @@
     <string name="key_bind_overlay_main">开启/关闭主屏遮罩</string>
     <string name="key_bind_overlay_secondary">开启/关闭副屏遮罩</string>
     <string name="key_bind_floating_ball">显示/隐藏悬浮球</string>
+    <string name="key_bind_overlay_prev">切换上一个遮罩</string>
+    <string name="key_bind_overlay_next">切换下一个遮罩</string>
+    <string name="key_bind_overlay_no_more">没有更多了</string>
     <string name="adjust_opacity">调整透明度</string>
     <string name="cancel">取消</string>
     <string name="apply">应用</string>
