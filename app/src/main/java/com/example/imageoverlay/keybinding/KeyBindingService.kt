@@ -14,6 +14,11 @@ import com.example.imageoverlay.util.OverlayToggler
  */
 class KeyBindingService : AccessibilityService() {
 
+    companion object {
+        @Volatile
+        var instance: KeyBindingService? = null
+    }
+
     // 用于组合键检测：当前按下的键；组合触发后需全部抬起才可再次触发
     private val pressedKeys: MutableSet<Int> = mutableSetOf()
     private var comboTriggered = false
@@ -28,12 +33,18 @@ class KeyBindingService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
+        instance = this
         try {
             // 请求过滤按键事件（Android会参考无障碍xml中的 canRequestFilterKeyEvents）
             serviceInfo = serviceInfo?.apply {
                 flags = flags or android.accessibilityservice.AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
             }
         } catch (_: Exception) {}
+    }
+
+    override fun onDestroy() {
+        instance = null
+        super.onDestroy()
     }
 
     override fun onKeyEvent(event: KeyEvent?): Boolean {

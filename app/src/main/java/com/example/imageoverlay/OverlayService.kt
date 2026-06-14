@@ -14,6 +14,7 @@ import android.os.IBinder
 import android.view.Display
 import android.view.WindowManager
 import android.widget.ImageView
+import com.example.imageoverlay.util.DisplayUtil
 import androidx.core.app.NotificationCompat
 import pl.droidsonroids.gif.GifImageView
 import pl.droidsonroids.gif.GifDrawable
@@ -25,8 +26,10 @@ class OverlayService : Service() {
     private data class DisplayOverlay(
         var windowManager: WindowManager,
         var imageView: ImageView?,
+        var layoutParams: WindowManager.LayoutParams?,
         var imageUri: String?,
-        var opacity: Int
+        var opacity: Int,
+        var usesAccessibilityOverlay: Boolean
     )
 
     private val overlays = mutableMapOf<Int, DisplayOverlay>()
@@ -125,7 +128,8 @@ class OverlayService : Service() {
 
     private fun showOverlay(displayKey: Int, displayId: Int, imageUri: Uri, opacity: Int): Boolean {
         return try {
-            val windowManager = windowManagerForDisplay(displayId) ?: return false
+            val usesAccessibilityOverlay = DisplayUtil.canUseAccessibilityOverlay(this, displayId)
+            val windowManager = windowManagerForDisplay(displayId, usesAccessibilityOverlay) ?: return false
 
             val mimeType = contentResolver.getType(imageUri)
             val isGif = mimeType == "image/gif" || imageUri.toString().lowercase().endsWith(".gif")
@@ -155,21 +159,18 @@ class OverlayService : Service() {
             }
 
             imageView.scaleType = ImageView.ScaleType.FIT_XY
-            imageView.alpha = opacity / 100f
+            imageView.isClickable = false
+            imageView.isFocusable = false
 
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.MATCH_PARENT,
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-                else
-                    WindowManager.LayoutParams.TYPE_PHONE,
-                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
-                        WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                        WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                DisplayUtil.overlayWindowType(this, displayId),
+                DisplayUtil.overlayWindowFlags(),
                 PixelFormat.TRANSLUCENT
             )
+            DisplayUtil.applyOverlayLayoutParams(params, windowManager)
+            DisplayUtil.applyOverlayVisualOpacity(params, imageView, opacity, usesAccessibilityOverlay)
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val coverCutout = com.example.imageoverlay.model.ConfigRepository.isCoverCutoutEnabled(this)
@@ -184,7 +185,14 @@ class OverlayService : Service() {
             }
 
             windowManager.addView(imageView, params)
-            overlays[displayKey] = DisplayOverlay(windowManager, imageView, imageUri.toString(), opacity)
+            overlays[displayKey] = DisplayOverlay(
+                windowManager,
+                imageView,
+                params,
+                imageUri.toString(),
+                opacity,
+                usesAccessibilityOverlay
+            )
             true
         } catch (e: Exception) {
             android.util.Log.e("OverlayService", "showOverlay异常 display=$displayKey", e)
@@ -192,7 +200,11 @@ class OverlayService : Service() {
         }
     }
 
-    private fun windowManagerForDisplay(displayId: Int): WindowManager? {
+    private fun windowManagerForDisplay(displayId: Int, usesAccessibilityOverlay: Boolean): WindowManager? {
+        if (usesAccessibilityOverlay) {
+            return com.example.imageoverlay.keybinding.KeyBindingService.instance
+                ?.getSystemService(WINDOW_SERVICE) as? WindowManager
+        }
         return if (displayId > 0 && Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             val dm = getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
             val display = dm.getDisplay(displayId) ?: return getSystemService(WINDOW_SERVICE) as WindowManager
@@ -229,7 +241,21 @@ class OverlayService : Service() {
     fun updateOpacity(opacity: Int) {
         overlays.values.forEach { entry ->
             entry.opacity = opacity
-            entry.imageView?.alpha = opacity / 100f
+            val imageView = entry.imageView
+            val params = entry.layoutParams
+            if (imageView != null && params != null) {
+                DisplayUtil.applyOverlayVisualOpacity(
+                    params,
+                    imageView,
+                    opacity,
+                    entry.usesAccessibilityOverlay
+                )
+                try {
+                    entry.windowManager.updateViewLayout(imageView, params)
+                } catch (e: Exception) {
+                    android.util.Log.e("OverlayService", "更新透明度失败", e)
+                }
+            }
         }
     }
 
